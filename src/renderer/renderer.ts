@@ -34,8 +34,11 @@ function onServerReady(url: string): void {
   if (baseUrl) return; // already initialized
   baseUrl = url;
   statusEl.remove();
+  addPaneBtn.disabled = false;
   addPane();
 }
+
+addPaneBtn.addEventListener('click', () => addPane());
 
 function onServerError(message: string): void {
   statusEl.textContent = `VS Code failed to start: ${message}`;
