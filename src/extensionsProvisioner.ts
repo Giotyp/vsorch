@@ -8,11 +8,17 @@ const HOME = os.homedir();
 /** The desktop VS Code extensions dir — the per-machine source of truth. */
 export const DESKTOP_EXTENSIONS_DIR = path.join(HOME, '.vscode', 'extensions');
 
-/** Stable snapshot dir owned by vsorch, refreshed incrementally on every launch. */
-export const SNAPSHOT_DIR = path.join(HOME, '.vsorch', 'extensions');
-
-/** Stable server data dir (kept across launches, never nested in the snapshot). */
+/** Stable server data dir (kept across launches). */
 export const SERVER_DATA_DIR = path.join(HOME, '.vsorch', 'server-data');
+
+/**
+ * Stable snapshot dir owned by vsorch, refreshed incrementally on every
+ * launch. `code serve-web` has no `--extensions-dir` flag; instead the code
+ * server it spawns defaults its extensions dir to
+ * `<server-data-dir>/extensions` (see vscode's server.main.ts), so the
+ * snapshot targets that location directly.
+ */
+export const SNAPSHOT_DIR = path.join(SERVER_DATA_DIR, 'extensions');
 
 function run(cmd: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -49,7 +55,8 @@ async function isDirectory(p: string): Promise<boolean> {
  *  2. macOS/APFS: wipe + `cp -c -R` — copy-on-write clones, near-instant.
  *  3. Node `fs.cp` — portable last resort.
  *
- * Returns the snapshot dir to pass as `--extensions-dir`.
+ * Returns the snapshot dir (the server picks it up as its default
+ * extensions dir under `--server-data-dir`).
  */
 export async function provisionExtensions(): Promise<string> {
   await fs.mkdir(SERVER_DATA_DIR, { recursive: true });

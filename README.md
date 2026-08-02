@@ -11,16 +11,18 @@ and save files, integrated terminal) served by the machine's installed VS Code.
 On startup vsorch:
 
 1. Snapshots the desktop VS Code extensions (`~/.vscode/extensions`) into a
-   stable vsorch-owned dir (`~/.vsorch/extensions`), refreshed incrementally
-   with `rsync -a --delete` (APFS `cp -c` clone fallback). The desktop install
-   is the source of truth; the snapshot avoids contention with a running
-   desktop VS Code.
+   stable vsorch-owned dir (`~/.vsorch/server-data/extensions`), refreshed
+   incrementally with `rsync -a --delete` (APFS `cp -c` clone fallback). The
+   desktop install is the source of truth; the snapshot avoids contention with
+   a running desktop VS Code. (`serve-web` has no `--extensions-dir` flag —
+   the code server it spawns defaults to `<server-data-dir>/extensions`,
+   which is why the snapshot lives there.)
 2. Spawns one shared local web server using VS Code's built-in CLI:
 
    ```
    code serve-web --host 127.0.0.1 --port <PORT> \
      --without-connection-token --accept-server-license-terms \
-     --extensions-dir ~/.vsorch/extensions --server-data-dir ~/.vsorch/server-data
+     --server-data-dir ~/.vsorch/server-data
    ```
 
 3. Embeds the served workbench URL in `<webview>` panes. The `+` button in the

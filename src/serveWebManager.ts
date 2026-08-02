@@ -77,8 +77,12 @@ export class ServeWebManager {
    * Start `code serve-web` bound to 127.0.0.1 and resolve with the base URL
    * once the workbench is reachable. Readiness is detected primarily from the
    * "Web UI available at ..." stdout line, with port polling as a fallback.
+   *
+   * Note: `serve-web` has no `--extensions-dir` flag — the code server it
+   * spawns uses `<server-data-dir>/extensions`, which the extensions
+   * provisioner populates before this runs.
    */
-  async start(extensionsDir: string, serverDataDir: string): Promise<string> {
+  async start(serverDataDir: string): Promise<string> {
     if (this.baseUrl) return this.baseUrl;
 
     const port = await getFreePort();
@@ -91,8 +95,6 @@ export class ServeWebManager {
       String(port),
       '--without-connection-token',
       '--accept-server-license-terms',
-      '--extensions-dir',
-      extensionsDir,
       '--server-data-dir',
       serverDataDir,
     ];

@@ -40,9 +40,10 @@ const broadcast = (channel: string, ...args: unknown[]) => {
 
 const startServer = async () => {
   try {
-    // Snapshot the desktop extensions before the server spawns (§9).
-    const extensionsDir = await provisionExtensions();
-    const baseUrl = await serveWeb.start(extensionsDir, SERVER_DATA_DIR);
+    // Snapshot the desktop extensions into <server-data-dir>/extensions
+    // before the server spawns (§9).
+    await provisionExtensions();
+    const baseUrl = await serveWeb.start(SERVER_DATA_DIR);
     broadcast('vsorch:server-ready', baseUrl);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
