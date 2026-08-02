@@ -63,6 +63,14 @@ app.on('before-quit', () => {
   serveWeb.stop();
 });
 
+// Terminal signals (e.g. Ctrl+C during `npm start`) bypass Electron's normal
+// quit flow — route them through app.quit() so before-quit still runs.
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(signal, () => {
+    app.quit();
+  });
+}
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();

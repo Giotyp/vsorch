@@ -1,4 +1,4 @@
-import { ChildProcess, spawn } from 'node:child_process';
+import { ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -176,15 +176,54 @@ export class ServeWebManager {
     this.baseUrl = null;
     if (!child || child.pid === undefined || child.exitCode !== null) return;
     child.removeAllListeners('exit');
+
+    const pid = child.pid;
+
+    // Enumerate the group's members up front (serve-web spawns node helpers);
+    // signaling them individually backs up the group signal.
+    let members: number[] = [];
     try {
-      // Negative PID → the whole process group (serve-web + node helpers).
-      process.kill(-child.pid, 'SIGTERM');
+      const out = spawnSync('pgrep', ['-g', String(pid)], {
+        encoding: 'utf8',
+      });
+      members = (out.stdout || '')
+        .split('\n')
+        .map((line) => Number(line.trim()))
+        .filter((p) => Number.isInteger(p) && p > 0);
     } catch {
-      try {
-        child.kill('SIGTERM');
-      } catch {
-        // already gone
-      }
+      // pgrep unavailable — group signal alone will have to do
     }
+
+    const signalAll = (signal: NodeJS.Signals) => {
+      // Helpers first (deepest spawn last in pgrep order), then the group,
+      // then the direct child — signaling a helper after its parent died can
+      // be unreliable.
+      for (const member of [...members].reverse()) {
+        if (member === pid) continue;
+        try {
+          process.kill(member, signal);
+        } catch {
+          // already dead
+        }
+      }
+      try {
+        // Negative PID → the whole process group.
+        process.kill(-pid, signal);
+      } catch {
+        // group already gone (or unsupported)
+      }
+      try {
+        child.kill(signal);
+      } catch {
+        // already dead
+      }
+    };
+
+    signalAll('SIGTERM');
+
+    // Escalate in case anything ignored SIGTERM. unref: best-effort — don't
+    // hold the app open for it.
+    const escalation = setTimeout(() => signalAll('SIGKILL'), 2_000);
+    escalation.unref();
   }
 }
