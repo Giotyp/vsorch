@@ -116,12 +116,12 @@ export class ServeWebManager {
         settled = true;
         clearInterval(pollTimer);
         clearTimeout(deadline);
-        if (err) {
+        if (err || !url) {
           this.stop();
-          reject(err);
+          reject(err ?? new Error('serve-web settled without a URL'));
         } else {
-          this.baseUrl = url!;
-          resolve(url!);
+          this.baseUrl = url;
+          resolve(url);
         }
       };
 

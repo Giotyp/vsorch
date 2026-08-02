@@ -26,8 +26,24 @@ function addPane(): void {
 
   const webview = document.createElement('webview');
   webview.setAttribute('src', `${baseUrl}/?vsorchPane=${paneId}`);
+
+  // Route keystrokes to whichever pane the user last interacted with, and
+  // show a visible active indicator on it.
+  webview.addEventListener('focus', () => setActivePane(pane));
+  webview.addEventListener('dom-ready', () => webview.focus());
+  pane.addEventListener('mousedown', () => webview.focus());
+
   pane.appendChild(webview);
   panesEl.appendChild(pane);
+  setActivePane(pane);
+  webview.focus();
+}
+
+function setActivePane(pane: HTMLDivElement): void {
+  for (const active of Array.from(panesEl.querySelectorAll('.pane.active'))) {
+    active.classList.remove('active');
+  }
+  pane.classList.add('active');
 }
 
 function onServerReady(url: string): void {

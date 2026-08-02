@@ -58,6 +58,11 @@ app.on('ready', () => {
   void startServer();
 });
 
+// Kill the serve-web process group so no orphaned servers survive quit (§8.3).
+app.on('before-quit', () => {
+  serveWeb.stop();
+});
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
