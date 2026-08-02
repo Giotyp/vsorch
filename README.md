@@ -51,8 +51,13 @@ npm start
 ```
 
 The window opens with one VS Code Welcome workbench. Click `+` in the top bar
-to split 50/50 with a second independent workbench. Click a pane to focus it
-(highlighted with a top accent line).
+to add another independent workbench. Click a pane to focus it (highlighted
+with a top accent line).
+
+The `⊞` button picks the pane layout: **one row** (side by side), **one
+column** (stacked), or **grid** (near-square — e.g. 3 panes become 2 on top
+and 1 spanning the bottom row). Layouts are applied with CSS grid, so
+rearranging never reloads a pane.
 
 ## Project structure
 

@@ -7,7 +7,17 @@
   <body>
     <div id="topbar">
       <span id="title">vsorch</span>
-      <button id="add-pane" title="Add pane" disabled>+</button>
+      <div id="topbar-actions">
+        <div id="layout-wrap">
+          <button id="layout-btn" title="Pane layout" disabled>⊞</button>
+          <div id="layout-menu" class="hidden">
+            <button data-layout="row">◫ One row</button>
+            <button data-layout="column">⊟ One column</button>
+            <button data-layout="grid">⊞ Grid</button>
+          </div>
+        </div>
+        <button id="add-pane" title="Add pane" disabled>+</button>
+      </div>
     </div>
     <div id="panes">
       <div id="status">starting VS Code…</div>
