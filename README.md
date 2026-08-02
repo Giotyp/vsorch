@@ -32,6 +32,13 @@ On startup vsorch:
 The server binds to `127.0.0.1` only and is killed (whole process group) when
 vsorch quits.
 
+The port is stable across launches (saved in `~/.vsorch/config.json`,
+default 45990): the workbench keeps user state — color theme, settings, UI
+layout — in browser storage scoped to the `http://127.0.0.1:<port>` origin,
+so a stable port is what makes those choices persist between vsorch runs. If
+another app ever occupies the port, vsorch scans forward to the next free one
+and saves it (workbench state resets once when that happens).
+
 ## Prerequisites
 
 - macOS (primary target)

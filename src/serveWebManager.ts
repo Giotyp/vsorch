@@ -2,8 +2,20 @@ import { ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
 
 const READY_RE = /Web UI available at\s+(http:\/\/127\.0\.0\.1:\d+)/;
+
+/**
+ * The workbench persists user state (theme, settings, UI layout) in
+ * origin-scoped browser storage — http://127.0.0.1:<port>. A different port
+ * per launch would be a different origin and lose that state, so vsorch
+ * keeps a stable port in its config and reuses it across launches.
+ */
+const DEFAULT_PORT = 45990;
+const PORT_SCAN_RANGE = 20;
+const CONFIG_PATH = path.join(os.homedir(), '.vsorch', 'config.json');
 
 /** How long to wait for readiness. First run may download the server component. */
 const READY_TIMEOUT_MS = 180_000;
@@ -34,6 +46,79 @@ function getFreePort(): Promise<number> {
       }
     });
   });
+}
+
+function canBind(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.once('error', () => resolve(false));
+    srv.listen(port, '127.0.0.1', () => {
+      srv.close(() => resolve(true));
+    });
+  });
+}
+
+async function readSavedPort(): Promise<number | null> {
+  try {
+    const raw = await fs.readFile(CONFIG_PATH, 'utf8');
+    const config: unknown = JSON.parse(raw);
+    if (
+      typeof config === 'object' &&
+      config !== null &&
+      'serverPort' in config
+    ) {
+      const port = (config as { serverPort: unknown }).serverPort;
+      if (typeof port === 'number' && Number.isInteger(port) && port > 0) {
+        return port;
+      }
+    }
+  } catch {
+    // no config yet, or unreadable — fall back to defaults
+  }
+  return null;
+}
+
+async function savePort(port: number): Promise<void> {
+  try {
+    await fs.mkdir(path.dirname(CONFIG_PATH), { recursive: true });
+    let config: Record<string, unknown> = {};
+    try {
+      const parsed: unknown = JSON.parse(await fs.readFile(CONFIG_PATH, 'utf8'));
+      if (typeof parsed === 'object' && parsed !== null) {
+        config = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // start fresh
+    }
+    config.serverPort = port;
+    await fs.writeFile(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`);
+  } catch (err) {
+    console.warn('[vsorch] could not save server port:', err);
+  }
+}
+
+/**
+ * Pick the serve-web port: the saved one if still free, otherwise scan a
+ * small fixed range (so the origin only changes when something else has
+ * squatted on the port), and as a last resort any free ephemeral port.
+ * The choice is saved so subsequent launches reuse it.
+ */
+async function getStablePort(): Promise<number> {
+  const saved = await readSavedPort();
+  const candidates: number[] = [];
+  if (saved !== null) candidates.push(saved);
+  for (let p = DEFAULT_PORT; p < DEFAULT_PORT + PORT_SCAN_RANGE; p++) {
+    if (p !== saved) candidates.push(p);
+  }
+  for (const port of candidates) {
+    if (await canBind(port)) {
+      if (port !== saved) await savePort(port);
+      return port;
+    }
+  }
+  const fallback = await getFreePort();
+  await savePort(fallback);
+  return fallback;
 }
 
 async function resolveCodeCli(): Promise<string> {
@@ -85,7 +170,7 @@ export class ServeWebManager {
   async start(serverDataDir: string): Promise<string> {
     if (this.baseUrl) return this.baseUrl;
 
-    const port = await getFreePort();
+    const port = await getStablePort();
     const cli = await resolveCodeCli();
     const args = [
       'serve-web',
