@@ -1,11 +1,15 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
+import { provisionExtensions, SERVER_DATA_DIR } from './extensionsProvisioner';
+import { ServeWebManager } from './serveWebManager';
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (started) {
   app.quit();
 }
+
+const serveWeb = new ServeWebManager();
 
 const createWindow = () => {
   const mainWindow = new BrowserWindow({
@@ -28,7 +32,31 @@ const createWindow = () => {
   }
 };
 
-app.on('ready', createWindow);
+const broadcast = (channel: string, ...args: unknown[]) => {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send(channel, ...args);
+  }
+};
+
+const startServer = async () => {
+  try {
+    // Snapshot the desktop extensions before the server spawns (§9).
+    const extensionsDir = await provisionExtensions();
+    const baseUrl = await serveWeb.start(extensionsDir, SERVER_DATA_DIR);
+    broadcast('vsorch:server-ready', baseUrl);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[vsorch] serve-web failed to start:', message);
+    broadcast('vsorch:server-error', message);
+  }
+};
+
+ipcMain.handle('vsorch:get-base-url', () => serveWeb.baseUrl);
+
+app.on('ready', () => {
+  createWindow();
+  void startServer();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
