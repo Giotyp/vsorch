@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 import { provisionExtensions, SERVER_DATA_DIR } from './extensionsProvisioner';
+import { RemoteConnectionManager } from './remoteConnection';
 import { RemoteResolution, resolveRemotes } from './remotes';
 import { ServeWebManager } from './serveWebManager';
 
@@ -77,8 +78,31 @@ const startRemotes = async () => {
   }
 };
 
+const remoteManager = new RemoteConnectionManager((status) => {
+  console.log(
+    `[vsorch] remote ${status.hostAlias}: ${status.state}` +
+      (status.error ? ` (${status.error.kind}: ${status.error.message})` : ''),
+  );
+  broadcast('vsorch:remote-status', status);
+});
+
 ipcMain.handle('vsorch:get-base-url', () => serveWeb.baseUrl);
 ipcMain.handle('vsorch:get-remotes', () => remoteResolutions);
+ipcMain.handle('vsorch:get-remote-statuses', () => remoteManager.statuses());
+ipcMain.handle('vsorch:open-remote-pane', async (_event, hostAlias: string) => {
+  const resolved = remoteResolutions.find((r) => r.hostAlias === hostAlias);
+  if (!resolved || !resolved.ok) {
+    return {
+      hostAlias,
+      state: 'failed',
+      error:
+        resolved && !resolved.ok
+          ? resolved.error
+          : { kind: 'unknown', message: 'host is not resolved yet' },
+    };
+  }
+  return remoteManager.open(hostAlias, resolved.info.codePath);
+});
 
 app.on('ready', () => {
   createWindow();
@@ -88,9 +112,11 @@ app.on('ready', () => {
   void startRemotes();
 });
 
-// Kill the serve-web process group so no orphaned servers survive quit (§8.3).
+// Kill the serve-web process group so no orphaned servers survive quit (§8.3),
+// and tear down every remote host connection (forward, remote group, master).
 app.on('before-quit', () => {
   serveWeb.stop();
+  remoteManager.closeAllSync();
 });
 
 // Terminal signals (e.g. Ctrl+C during `npm start`) bypass Electron's normal

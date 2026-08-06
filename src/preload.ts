@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
+import type { RemoteStatus } from './remoteConnection';
 import type { RemoteResolution } from './remotes';
 
 export interface VsorchApi {
@@ -13,6 +14,12 @@ export interface VsorchApi {
   getRemotes(): Promise<RemoteResolution[]>;
   /** Fires when all configured remotes finished resolving. */
   onRemotesResolved(callback: (remotes: RemoteResolution[]) => void): void;
+  /** Bring up (or reuse) the host's serve-web; resolves at serving/failed. */
+  openRemotePane(hostAlias: string): Promise<RemoteStatus>;
+  /** Current connection status for every host that was opened. */
+  getRemoteStatuses(): Promise<RemoteStatus[]>;
+  /** Fires on every remote connection state change. */
+  onRemoteStatus(callback: (status: RemoteStatus) => void): void;
 }
 
 const api: VsorchApi = {
@@ -32,6 +39,14 @@ const api: VsorchApi = {
     ipcRenderer.on(
       'vsorch:remotes-resolved',
       (_event, remotes: RemoteResolution[]) => callback(remotes),
+    );
+  },
+  openRemotePane: (hostAlias) =>
+    ipcRenderer.invoke('vsorch:open-remote-pane', hostAlias),
+  getRemoteStatuses: () => ipcRenderer.invoke('vsorch:get-remote-statuses'),
+  onRemoteStatus: (callback) => {
+    ipcRenderer.on('vsorch:remote-status', (_event, status: RemoteStatus) =>
+      callback(status),
     );
   },
 };

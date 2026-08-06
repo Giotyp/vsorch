@@ -1,9 +1,9 @@
 import { ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import http from 'node:http';
-import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { canBind, getFreePort } from './ports';
 
 const READY_RE = /Web UI available at\s+(http:\/\/127\.0\.0\.1:\d+)/;
 
@@ -31,32 +31,6 @@ const CODE_CLI_CANDIDATES = [
   '/opt/homebrew/bin/code',
   '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code',
 ];
-
-function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.once('error', reject);
-    srv.listen(0, '127.0.0.1', () => {
-      const address = srv.address();
-      if (address && typeof address === 'object') {
-        const port = address.port;
-        srv.close(() => resolve(port));
-      } else {
-        srv.close(() => reject(new Error('could not allocate a free port')));
-      }
-    });
-  });
-}
-
-function canBind(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const srv = net.createServer();
-    srv.once('error', () => resolve(false));
-    srv.listen(port, '127.0.0.1', () => {
-      srv.close(() => resolve(true));
-    });
-  });
-}
 
 async function readSavedPort(): Promise<number | null> {
   try {
