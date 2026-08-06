@@ -137,6 +137,8 @@ export class RemoteConnection {
   private channel: ChildProcess | null = null;
   private channelExitInfo: { code: number | null; output: string } | null =
     null;
+  /** Rolling tail of the serve-web channel's output, for diagnostics. */
+  private channelTail = '';
   private remotePid: number | null = null;
   private remotePort: number | null = null;
   private localPort: number | null = null;
@@ -262,7 +264,10 @@ export class RemoteConnection {
       await delay(1_000);
     }
     throw new RemoteCodeError(
-      `serve-web on "${this.hostAlias}" never became reachable through the forwarded port (first run downloads the server component — retry if the host is slow).`,
+      `serve-web on "${this.hostAlias}" never became reachable through the forwarded port (first run downloads the server component — retry if the host is slow).` +
+        (this.channelTail.trim()
+          ? ` Server output: …${this.channelTail.trim().slice(-400)}`
+          : ''),
       'unreachable',
       this.hostAlias,
     );
@@ -365,7 +370,16 @@ export class RemoteConnection {
       };
 
       const onOutput = (chunk: Buffer) => {
-        out += chunk.toString();
+        const text = chunk.toString();
+        out += text;
+        // Stream the host's output to the app log and keep a tail for
+        // error messages — real binaries say surprising things.
+        this.channelTail = (this.channelTail + text).slice(-1_000);
+        for (const line of text.split('\n')) {
+          if (line.trim()) {
+            console.log(`[vsorch] ${this.hostAlias} serve-web: ${line}`);
+          }
+        }
         if (remotePid === null) {
           const pidMatch = REMOTE_PID_RE.exec(out);
           if (pidMatch) {
