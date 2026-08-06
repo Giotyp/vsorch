@@ -84,10 +84,34 @@ bring-up) and verifies it supports `serve-web`:
 
 `hostAlias` is an SSH alias from `~/.ssh/config`; key-based auth must work
 non-interactively (`BatchMode=yes`). `codePath` skips discovery for hosts
-that hide `code` behind an interactive-only PATH. Results are logged and
-exposed to the renderer (`getRemotes()` / `onRemotesResolved`); spawning
-remote serve-web panes is the next phase. `scripts/probe.ts` tests a single
+that hide `code` behind an interactive-only PATH (a leading `~/` is expanded
+remotely). Resolution also asserts that the host permits loopback `-L`
+forwards (`forwardingDenied` otherwise). `scripts/probe.ts` tests a single
 host from the command line.
+
+### Remote panes
+
+The `☁` top-bar button lists resolved hosts; clicking one opens a remote
+pane. Per host, vsorch opens one SSH ControlMaster (through whatever
+`ProxyJump` your ssh config declares), runs
+
+```
+<code> serve-web --host 127.0.0.1 --port 0 \
+  --server-data-dir ~/.vsorch/server-data \
+  --accept-server-license-terms --without-connection-token
+```
+
+on the host (loopback-bound; the SSH tunnel is the only ingress), and
+forwards a stable local port (`46100+`, remembered per host in
+`remoteLocalPorts`) to the port the server picked. All panes on one host
+share that local origin — independent workspaces, shared theme/settings —
+and remote panes join the `⊞` layouts like any other pane.
+
+Teardown is belt-and-suspenders: an explicit remote process-group kill over
+the master, plus a remote watchdog that reaps the serve-web group the moment
+the SSH channel dies (so a dropped link can't orphan servers on the host).
+Live connections are health-polled; on a drop the pane goes stale, vsorch
+retries twice, then offers manual reconnect.
 
 ## Project structure
 

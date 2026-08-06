@@ -63,8 +63,84 @@ body {
   cursor: default;
 }
 
-#layout-wrap {
+#layout-wrap,
+#remotes-wrap {
   position: relative;
+}
+
+#remotes-menu {
+  position: absolute;
+  top: 30px;
+  right: 0;
+  z-index: 10;
+  min-width: 210px;
+  padding: 4px;
+  background: #2d2d2d;
+  border: 1px solid #454545;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+#remotes-menu.hidden {
+  display: none;
+}
+
+#remotes-empty {
+  padding: 5px 8px;
+  color: #888;
+  font-size: 12px;
+}
+
+#remotes-menu button.remote-entry {
+  all: unset;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 4px;
+  color: #cccccc;
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+#remotes-menu button.remote-entry:hover {
+  background: #3c3c3c;
+}
+
+#remotes-menu button.remote-entry:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.remote-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 8px;
+  background: #666;
+}
+
+.remote-dot.ok {
+  background: #2ea043;
+}
+
+.remote-dot.busy {
+  background: #d4a72c;
+}
+
+.remote-dot.bad {
+  background: #d1483e;
+}
+
+.remote-detail {
+  color: #888;
+  font-size: 11px;
+  margin-left: auto;
 }
 
 #layout-menu {
@@ -139,4 +215,58 @@ body {
 
 .pane.active {
   box-shadow: inset 0 2px 0 0 #0078d4;
+}
+
+.pane-label {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 3;
+  padding: 1px 7px;
+  border-radius: 8px;
+  background: rgba(37, 37, 38, 0.85);
+  color: #9da5b4;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  pointer-events: none;
+}
+
+.pane-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: #1e1e1e;
+  color: #999;
+  font-size: 13px;
+  text-align: center;
+  padding: 0 24px;
+}
+
+.pane-overlay.stale {
+  background: rgba(30, 30, 30, 0.88);
+}
+
+.pane-overlay .overlay-error {
+  color: #d1483e;
+  max-width: 480px;
+  line-height: 1.4;
+}
+
+.pane-overlay button {
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  background: #2d2d2d;
+  color: #cccccc;
+  font-size: 12px;
+  padding: 5px 14px;
+  cursor: pointer;
+}
+
+.pane-overlay button:hover {
+  background: #3c3c3c;
 }

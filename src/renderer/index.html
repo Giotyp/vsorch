@@ -8,6 +8,12 @@
     <div id="topbar">
       <span id="title">vsorch</span>
       <div id="topbar-actions">
+        <div id="remotes-wrap">
+          <button id="remotes-btn" title="Remote hosts" disabled>&#x2601;</button>
+          <div id="remotes-menu" class="hidden">
+            <div id="remotes-empty">no remotes configured</div>
+          </div>
+        </div>
         <div id="layout-wrap">
           <button id="layout-btn" title="Pane layout" disabled>⊞</button>
           <div id="layout-menu" class="hidden">
@@ -16,7 +22,7 @@
             <button data-layout="grid">⊞ Grid</button>
           </div>
         </div>
-        <button id="add-pane" title="Add pane" disabled>+</button>
+        <button id="add-pane" title="Add local pane" disabled>+</button>
       </div>
     </div>
     <div id="panes">
