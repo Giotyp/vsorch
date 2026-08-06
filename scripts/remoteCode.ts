@@ -1,4 +1,5 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import net from "node:net";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -11,10 +12,13 @@ export interface RemoteCodeInfo {
 }
 
 export type RemoteCodeErrorKind =
-    | "unreachable" // DNS / ProxyJump / timeout / auth under BatchMode
+    | "unreachable" // DNS / ProxyJump / timeout
+    | "authFailed" // key auth rejected under BatchMode
     | "hostKey" // unknown or changed host key
     | "noCode" // couldn't locate `code`
-    | "tooOld" // `code` found but no serve-web support
+    | "noServeWeb" // `code` found but no serve-web support (too old)
+    | "forwardingDenied" // sshd refuses loopback -L forwards
+    | "dropped" // live connection lost (used by the connection manager)
     | "unknown";
 
 export class RemoteCodeError extends Error {
@@ -74,9 +78,21 @@ function shSingleQuote(s: string): string {
     return "'" + s.replace(/'/g, `'\\''`) + "'";
 }
 
+/**
+ * Shell expression for a configured code path. A leading `~/` is rewritten to
+ * `"$HOME"/` — the path is single-quoted (no shell expansion), so a literal
+ * `~` would silently fail the `-x` test and masquerade as `noCode` (the same
+ * class of misclassification fixed in acb392b).
+ */
+export function shCodePathExpr(p: string): string {
+    if (p === "~") return `"$HOME"`;
+    if (p.startsWith("~/")) return `"$HOME"/${shSingleQuote(p.slice(2))}`;
+    return shSingleQuote(p);
+}
+
 function buildRemoteScript(codePathOverride?: string): string {
     if (codePathOverride) {
-        return `CODE=${shSingleQuote(codePathOverride)}
+        return `CODE=${shCodePathExpr(codePathOverride)}
 [ -x "$CODE" ] || { echo VSORCH_NO_CODE >&2; exit 3; }
 ${VERIFY}`;
     }
@@ -136,12 +152,118 @@ export async function resolveRemoteCode(
     if (!serveWebSupported) {
         throw new RemoteCodeError(
             `VS Code on "${hostAlias}" (${version || "unknown version"}) doesn't support \`serve-web\` — you need ${MIN_SERVE_WEB_VERSION} or newer.`,
-            "tooOld",
+            "noServeWeb",
             hostAlias,
         );
     }
 
+    // Loopback -L forwarding is how panes reach the remote server — assert it
+    // now so a blocked host fails at resolve time with a typed reason, not at
+    // pane bring-up with a murky timeout.
+    await assertForwarding(hostAlias);
+
     return { hostAlias, codePath, version, serveWebSupported };
+}
+
+/** Port in the serve-web class used for the forwarding probe. `PermitOpen`
+ *  can allow port 22 while refusing high ports, so probing 22 proves nothing. */
+const FORWARD_PROBE_REMOTE_PORT = 45999;
+
+function freeLoopbackPort(): Promise<number> {
+    return new Promise((resolve, reject) => {
+        const srv = net.createServer();
+        srv.once("error", reject);
+        srv.listen(0, "127.0.0.1", () => {
+            const addr = srv.address();
+            if (addr && typeof addr === "object") {
+                const port = addr.port;
+                srv.close(() => resolve(port));
+            } else {
+                srv.close(() => reject(new Error("no free port")));
+            }
+        });
+    });
+}
+
+function delay(ms: number): Promise<void> {
+    return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Connect to a local port and wait for the peer to respond or hang up. */
+function pokePort(port: number): Promise<void> {
+    return new Promise((resolve) => {
+        const sock = net.connect(port, "127.0.0.1");
+        const done = () => {
+            sock.destroy();
+            resolve();
+        };
+        sock.on("connect", () => {
+            // Give sshd a moment to open (or refuse) the channel, then hang up.
+            setTimeout(done, 500);
+        });
+        sock.on("error", done);
+        sock.on("close", () => resolve());
+        setTimeout(done, 2_000);
+    });
+}
+
+/**
+ * Assert that `hostAlias` permits loopback `-L` forwards. Opens a short-lived
+ * forward to a (probably unused) port in the serve-web class and pokes it:
+ * `administratively prohibited` on the channel means forwarding is disabled
+ * (`forwardingDenied`); a plain refused/failed connect means forwarding works
+ * and simply nothing is listening — which is success for this probe.
+ */
+export async function assertForwarding(hostAlias: string): Promise<void> {
+    const localPort = await freeLoopbackPort();
+    const args = [
+        "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=15",
+        "-L", `127.0.0.1:${localPort}:127.0.0.1:${FORWARD_PROBE_REMOTE_PORT}`,
+        hostAlias,
+        "sleep 5",
+    ];
+
+    const child = spawn("ssh", args, { stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    child.stderr?.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+    });
+    let exited = false;
+    child.on("exit", () => {
+        exited = true;
+    });
+
+    try {
+        // Let the forward come up, then poke it and let stderr arrive.
+        await delay(700);
+        if (!exited) {
+            await pokePort(localPort);
+            await delay(400);
+        }
+
+        if (/administratively prohibited/i.test(stderr)) {
+            throw new RemoteCodeError(
+                `"${hostAlias}" refuses loopback port forwards (AllowTcpForwarding/PermitOpen). Remote panes need \`-L\` forwarding enabled in sshd_config.`,
+                "forwardingDenied",
+                hostAlias,
+            );
+        }
+        if (exited && child.exitCode !== 0) {
+            // ssh died before/without serving the forward — reuse the
+            // standard classification (auth, host key, unreachable, …).
+            throw classifySshError(
+                { code: child.exitCode ?? undefined, stderr },
+                hostAlias,
+            );
+        }
+    } finally {
+        try {
+            child.kill("SIGTERM");
+        } catch {
+            // already gone
+        }
+    }
 }
 
 function classifySshError(err: unknown, hostAlias: string): RemoteCodeError {
@@ -169,7 +291,7 @@ function classifySshError(err: unknown, hostAlias: string): RemoteCodeError {
     if (/Permission denied|password/i.test(text)) {
         return new RemoteCodeError(
             `SSH auth to "${hostAlias}" failed under BatchMode (no key-based login). Make sure \`ssh ${hostAlias}\` works without a password prompt.`,
-            "unreachable",
+            "authFailed",
             hostAlias,
         );
     }
