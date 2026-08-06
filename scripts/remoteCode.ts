@@ -145,8 +145,12 @@ export async function resolveRemoteCode(
 }
 
 function classifySshError(err: unknown, hostAlias: string): RemoteCodeError {
-    const e = err as { code?: number; stderr?: string; message?: string };
-    const text = `${e?.stderr ?? ""}\n${e?.message ?? ""}`;
+    const e = err as { code?: number | string; stderr?: string; message?: string };
+    // Pattern-match on stderr ONLY: execFile's err.message embeds the full
+    // command line — including our remote script, which itself contains the
+    // literal "VSORCH_NO_CODE" — so matching against it misclassifies every
+    // ssh failure as noCode.
+    const text = e?.stderr ?? "";
 
     if (e?.code === 3 || /VSORCH_NO_CODE/.test(text)) {
         return new RemoteCodeError(
