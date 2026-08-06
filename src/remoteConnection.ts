@@ -626,6 +626,12 @@ export class RemoteConnectionManager {
     return [...this.connections.values()].map((c) => c.status());
   }
 
+  /** Tear down one host's connection (used when its last pane closes). */
+  async closeHost(hostAlias: string): Promise<void> {
+    const connection = this.connections.get(hostAlias);
+    if (connection) await connection.close();
+  }
+
   async closeAll(): Promise<void> {
     await Promise.allSettled(
       [...this.connections.values()].map((c) => c.close()),

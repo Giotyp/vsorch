@@ -67,11 +67,39 @@ function createPane(host?: string): PaneRec {
     el.appendChild(label);
   }
 
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'pane-close';
+  closeBtn.title = 'Close pane';
+  closeBtn.textContent = '×';
+  closeBtn.addEventListener('mousedown', (event) => event.stopPropagation());
+  closeBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    closePane(rec);
+  });
+  el.appendChild(closeBtn);
+
   panesEl.appendChild(el);
   panes.push(rec);
   applyLayout();
   setActivePane(el);
   return rec;
+}
+
+function closePane(rec: PaneRec): void {
+  const index = panes.indexOf(rec);
+  if (index === -1) return;
+  panes.splice(index, 1);
+  const wasActive = rec.el.classList.contains('active');
+  rec.el.remove();
+  applyLayout();
+  if (wasActive && panes.length > 0) {
+    setActivePane(panes[panes.length - 1].el);
+  }
+  // Last pane on a remote host → tear down its connection (forward, remote
+  // server, master); the ☁ menu can bring it back up on demand.
+  if (rec.host && panesOf(rec.host).length === 0) {
+    void window.vsorch.closeRemote(rec.host);
+  }
 }
 
 function setOverlay(

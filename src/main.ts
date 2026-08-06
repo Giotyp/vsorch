@@ -89,6 +89,9 @@ const remoteManager = new RemoteConnectionManager((status) => {
 ipcMain.handle('vsorch:get-base-url', () => serveWeb.baseUrl);
 ipcMain.handle('vsorch:get-remotes', () => remoteResolutions);
 ipcMain.handle('vsorch:get-remote-statuses', () => remoteManager.statuses());
+ipcMain.handle('vsorch:close-remote', async (_event, hostAlias: string) => {
+  await remoteManager.closeHost(hostAlias);
+});
 ipcMain.handle('vsorch:open-remote-pane', async (_event, hostAlias: string) => {
   const resolved = remoteResolutions.find((r) => r.hostAlias === hostAlias);
   if (!resolved || !resolved.ok) {

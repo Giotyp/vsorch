@@ -16,6 +16,8 @@ export interface VsorchApi {
   onRemotesResolved(callback: (remotes: RemoteResolution[]) => void): void;
   /** Bring up (or reuse) the host's serve-web; resolves at serving/failed. */
   openRemotePane(hostAlias: string): Promise<RemoteStatus>;
+  /** Tear down a host's connection (last pane on it was closed). */
+  closeRemote(hostAlias: string): Promise<void>;
   /** Current connection status for every host that was opened. */
   getRemoteStatuses(): Promise<RemoteStatus[]>;
   /** Fires on every remote connection state change. */
@@ -43,6 +45,8 @@ const api: VsorchApi = {
   },
   openRemotePane: (hostAlias) =>
     ipcRenderer.invoke('vsorch:open-remote-pane', hostAlias),
+  closeRemote: (hostAlias) =>
+    ipcRenderer.invoke('vsorch:close-remote', hostAlias),
   getRemoteStatuses: () => ipcRenderer.invoke('vsorch:get-remote-statuses'),
   onRemoteStatus: (callback) => {
     ipcRenderer.on('vsorch:remote-status', (_event, status: RemoteStatus) =>
