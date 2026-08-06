@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 import { provisionExtensions, SERVER_DATA_DIR } from './extensionsProvisioner';
+import { RemoteResolution, resolveRemotes } from './remotes';
 import { ServeWebManager } from './serveWebManager';
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
@@ -52,11 +53,39 @@ const startServer = async () => {
   }
 };
 
+/** Latest per-remote resolution results (empty until resolution completes). */
+let remoteResolutions: RemoteResolution[] = [];
+
+const startRemotes = async () => {
+  try {
+    remoteResolutions = await resolveRemotes();
+    for (const r of remoteResolutions) {
+      if (r.ok) {
+        console.log(
+          `[vsorch] remote ${r.hostAlias}: code ${r.info.version} at ` +
+            `${r.info.codePath} (serve-web ok)`,
+        );
+      } else {
+        console.warn(
+          `[vsorch] remote ${r.hostAlias}: ${r.error.kind} — ${r.error.message}`,
+        );
+      }
+    }
+    broadcast('vsorch:remotes-resolved', remoteResolutions);
+  } catch (err) {
+    console.error('[vsorch] remote resolution failed:', err);
+  }
+};
+
 ipcMain.handle('vsorch:get-base-url', () => serveWeb.baseUrl);
+ipcMain.handle('vsorch:get-remotes', () => remoteResolutions);
 
 app.on('ready', () => {
   createWindow();
+  // Local bring-up and remote resolution run in parallel — SSH latency (or a
+  // dead remote) must never delay the local workbench.
   void startServer();
+  void startRemotes();
 });
 
 // Kill the serve-web process group so no orphaned servers survive quit (§8.3).

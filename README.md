@@ -66,6 +66,29 @@ column** (stacked), or **grid** (near-square — e.g. 3 panes become 2 on top
 and 1 spanning the bottom row). Layouts are applied with CSS grid, so
 rearranging never reloads a pane.
 
+## Remote hosts (experimental)
+
+Remotes are declared in `~/.vsorch/config.json`. At startup vsorch resolves
+the `code` binary on each host over SSH (in parallel, never blocking local
+bring-up) and verifies it supports `serve-web`:
+
+```json
+{
+  "serverPort": 45990,
+  "remotes": [
+    { "hostAlias": "yecl-gpu-server" },
+    { "hostAlias": "other-box", "codePath": "/usr/local/bin/code" }
+  ]
+}
+```
+
+`hostAlias` is an SSH alias from `~/.ssh/config`; key-based auth must work
+non-interactively (`BatchMode=yes`). `codePath` skips discovery for hosts
+that hide `code` behind an interactive-only PATH. Results are logged and
+exposed to the renderer (`getRemotes()` / `onRemotesResolved`); spawning
+remote serve-web panes is the next phase. `scripts/probe.ts` tests a single
+host from the command line.
+
 ## Project structure
 
 ```
