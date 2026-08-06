@@ -126,6 +126,20 @@ function attachWebview(rec: PaneRec, origin: string): void {
     (webview as unknown as { focus(): void }).focus();
     clearOverlay(rec);
   });
+  // Surface load failures instead of hanging behind the overlay forever.
+  webview.addEventListener('did-fail-load', (event) => {
+    const e = event as unknown as {
+      errorCode: number;
+      errorDescription: string;
+      isMainFrame: boolean;
+    };
+    if (!e.isMainFrame || e.errorCode === -3 /* ERR_ABORTED: benign */) return;
+    setOverlay(rec, {
+      text: rec.host ? `${rec.host}: workbench failed to load` : 'workbench failed to load',
+      error: `${e.errorDescription} (${e.errorCode})`,
+      retry: rec.host !== undefined,
+    });
+  });
   rec.el.addEventListener('mousedown', () =>
     (webview as unknown as { focus(): void }).focus(),
   );

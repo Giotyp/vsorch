@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { RemoteCodeError, RemoteCodeErrorKind } from '../scripts/remoteCode';
 import { readConfig, updateConfig } from './config';
-import { canBind, scanForFreePort } from './ports';
+import { canBind } from './ports';
 
 /**
  * Per-host remote serve-web lifecycle (§2 of the remote-panes plan):
@@ -14,17 +14,18 @@ import { canBind, scanForFreePort } from './ports';
  * host share that one local origin.
  */
 
-/** Local ports for remote hosts scan from here (local serve-web uses 45990). */
-const LOCAL_REMOTE_PORT_BASE = 46100;
-const LOCAL_REMOTE_PORT_RANGE = 40;
-
 /**
- * Remote serve-web ports: explicit, scanned on the host by trial spawn.
- * (`--port 0` is useless here — the real CLI echoes the *configured* port in
- * its "Web UI available at" line, not the bound one, as seen on real hosts.)
+ * Per-host port, used identically on BOTH ends of the tunnel: serve-web
+ * binds it on the host's loopback and the same number is forwarded locally.
+ * The workbench generates URLs from its *configured* port, so a local port
+ * that differs from the remote port makes those URLs point at the wrong
+ * local server (e.g. the local serve-web) and the workbench never loads.
+ * Base is away from the local serve-web port (45990). Candidates must be
+ * free locally (canBind) and on the host (trial spawn; `--port 0` is
+ * useless — the CLI echoes the configured port, not the bound one).
  */
-const REMOTE_SERVER_PORT_BASE = 45990;
-const REMOTE_SERVER_PORT_RANGE = 20;
+const REMOTE_PORT_BASE = 46100;
+const REMOTE_PORT_RANGE = 40;
 
 /** How long a fresh spawn gets to crash (bad port, bad flags) before we
  *  treat the channel as live. */
@@ -220,17 +221,16 @@ export class RemoteConnection {
       throw this.classify(master.stderr, 'could not open SSH connection');
     }
 
-    // 2. Stable local port for this host (origin-scoped workbench state).
-    this.localPort = await this.allocLocalPort();
-
-    // 3. Spawn serve-web on an explicit remote port, trial-scanning the
-    //    range — an address-in-use spawn crashes fast and we move on.
+    // 2+3. One per-host port, free on both ends: serve-web binds it on the
+    //    host, and the same number is forwarded locally (see REMOTE_PORT_BASE
+    //    note). Trial-scan — an address-in-use spawn crashes fast.
     const { remotePid, remotePort } = await this.spawnOnFreePort();
     this.remotePid = remotePid;
     this.remotePort = remotePort;
+    this.localPort = remotePort;
 
-    // 4. Forward local → remote over the master.
-    this.forwardSpec = `127.0.0.1:${this.localPort}:127.0.0.1:${remotePort}`;
+    // 4. Forward local → remote over the master (same port both ends).
+    this.forwardSpec = `127.0.0.1:${remotePort}:127.0.0.1:${remotePort}`;
     const fwd = await runSsh([
       '-S',
       this.ctlPath,
@@ -268,69 +268,45 @@ export class RemoteConnection {
     );
   }
 
-  private async allocLocalPort(): Promise<number> {
-    const config = await readConfig();
-    const saved = (config.remoteLocalPorts ?? {}) as Record<string, unknown>;
-    const mine = saved[this.hostAlias];
-    if (typeof mine === 'number' && (await canBind(mine))) return mine;
-
-    const taken = new Set<number>(
-      Object.values(saved).filter((v): v is number => typeof v === 'number'),
-    );
-    const port = await scanForFreePort(
-      LOCAL_REMOTE_PORT_BASE,
-      LOCAL_REMOTE_PORT_RANGE,
-      taken,
-    );
-    if (port === null) {
-      throw new RemoteCodeError(
-        'no free local port for the remote forward',
-        'unknown',
-        this.hostAlias,
-      );
-    }
-    await updateConfig({
-      remoteLocalPorts: { ...saved, [this.hostAlias]: port },
-    });
-    return port;
-  }
-
-  /** Trial-spawn serve-web across the remote port range; the last-good port
-   *  is remembered per host so retries are rare. */
+  /** Trial-spawn serve-web across the port range; every candidate must be
+   *  free locally too (it becomes the forward's local port). The last-good
+   *  port is remembered per host, keeping the origin — and therefore the
+   *  workbench's origin-scoped state — stable across launches. */
   private async spawnOnFreePort(): Promise<{
     remotePid: number;
     remotePort: number;
   }> {
     const config = await readConfig();
-    const savedMap = (config.remoteServerPorts ?? {}) as Record<
-      string,
-      unknown
-    >;
+    const savedMap = (config.remotePorts ?? {}) as Record<string, unknown>;
     const savedRaw = savedMap[this.hostAlias];
     const saved = typeof savedRaw === 'number' ? savedRaw : null;
 
+    const otherHosts = new Set<number>(
+      Object.entries(savedMap)
+        .filter(([host]) => host !== this.hostAlias)
+        .map(([, v]) => v)
+        .filter((v): v is number => typeof v === 'number'),
+    );
+
     const candidates: number[] = [];
     if (saved !== null) candidates.push(saved);
-    for (
-      let p = REMOTE_SERVER_PORT_BASE;
-      p < REMOTE_SERVER_PORT_BASE + REMOTE_SERVER_PORT_RANGE;
-      p++
-    ) {
-      if (p !== saved) candidates.push(p);
+    for (let p = REMOTE_PORT_BASE; p < REMOTE_PORT_BASE + REMOTE_PORT_RANGE; p++) {
+      if (p !== saved && !otherHosts.has(p)) candidates.push(p);
     }
 
     for (const port of candidates) {
+      if (!(await canBind(port))) continue; // must be free locally too
       const result = await this.trySpawn(port);
       if (result === 'busy') continue;
       if (port !== saved) {
         await updateConfig({
-          remoteServerPorts: { ...savedMap, [this.hostAlias]: port },
+          remotePorts: { ...savedMap, [this.hostAlias]: port },
         });
       }
       return result;
     }
     throw new RemoteCodeError(
-      `no free serve-web port on "${this.hostAlias}" in ${REMOTE_SERVER_PORT_BASE}–${REMOTE_SERVER_PORT_BASE + REMOTE_SERVER_PORT_RANGE - 1}.`,
+      `no port free on both this machine and "${this.hostAlias}" in ${REMOTE_PORT_BASE}–${REMOTE_PORT_BASE + REMOTE_PORT_RANGE - 1}.`,
       'unknown',
       this.hostAlias,
     );
