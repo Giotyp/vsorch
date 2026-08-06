@@ -59,7 +59,9 @@ npm start
 
 The window opens with one VS Code Welcome workbench. Click `+` in the top bar
 to add another independent workbench. Click a pane to focus it (highlighted
-with a top accent line).
+with a top accent line); click the `×` in a pane's top-left corner to close
+it — closing a remote host's last pane also tears down that host's
+connection.
 
 The `⊞` button picks the pane layout: **one row** (side by side), **one
 column** (stacked), or **grid** (near-square — e.g. 3 panes become 2 on top
@@ -117,17 +119,22 @@ retries twice, then offers manual reconnect.
 
 ```
 src/
-├── main.ts                  # Electron main: window + IPC wiring
-├── extensionsProvisioner.ts # snapshot desktop extensions before server spawn
-├── serveWebManager.ts       # spawn/supervise serve-web, readiness, cleanup
-├── preload.ts               # contextBridge: server URL + events → renderer
+├── main.ts                   # Electron main: window + IPC wiring
+├── config.ts                 # read/update ~/.vsorch/config.json
+├── ports.ts                  # free-port allocation, loopback bind checks
+├── extensionsProvisioner.ts  # snapshot desktop extensions before server spawn
+├── serveWebManager.ts        # spawn/supervise the local serve-web, readiness, cleanup
+├── remotes.ts                # resolve configured remote hosts (SSH, code binary)
+├── remoteConnection.ts       # per-host ControlMaster + remote serve-web + forward
+├── preload.ts                # contextBridge: server URL + events → renderer
 └── renderer/
-    ├── index.html           # top bar + #panes container
-    ├── renderer.ts          # pane creation, split layout, focus handling
-    └── styles.css           # flexbox: fixed top bar + flex-row panes
+    ├── index.html            # top bar + #panes container
+    ├── renderer.ts           # pane creation/closing, layout, focus, remote UI
+    ├── layout.ts             # pure layout math (row/column/grid placement)
+    └── styles.css            # flexbox top bar + CSS grid panes
 ```
 
-## Known limitations (v0, by design)
+## Known limitations
 
 - Extensions installed *inside* a pane are ephemeral — the snapshot is
   refreshed from the desktop dir on every launch. Install extensions in
@@ -135,8 +142,8 @@ src/
 - serve-web runs the web/server workbench: workspace extensions (language
   servers, linters, formatters) work; some desktop-only UI extensions won't
   activate.
-- No pane closing, resizable dividers, session persistence, or remote/SSH
-  targets yet. Keyboard chords (Cmd+W/N/T) may be captured by Electron before
-  the pane sees them.
+- No resizable dividers or session persistence (panes aren't remembered
+  across restarts) yet. Keyboard chords (Cmd+W/N/T) may be captured by
+  Electron before the pane sees them.
 - If a pane won't load, check that the auto-installed serve-web server version
   matches the installed VS Code (`~/.vscode/cli/serve-web` can drift).
