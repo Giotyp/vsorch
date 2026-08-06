@@ -33,8 +33,11 @@ const SPAWN_GRACE_MS = 4_000;
 
 /** First-run serve-web may download the server component on the host. */
 const REMOTE_READY_TIMEOUT_MS = 240_000;
-const HEALTH_POLL_MS = 10_000;
+const HEALTH_POLL_MS = 15_000;
 const HEALTH_FAILURES_BEFORE_DROP = 2;
+/** Generous per-probe timeout — jump-host links can be slow, and a slow
+ *  answer must never be mistaken for a dead forward. */
+const PROBE_TIMEOUT_MS = 8_000;
 const RECONNECT_ATTEMPTS = 2;
 const RECONNECT_BACKOFF_MS = 2_000;
 
@@ -64,16 +67,29 @@ function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function probeHttp(port: number): Promise<boolean> {
+type ProbeResult = 'ok' | 'refused' | 'timeout';
+
+/**
+ * Probe the forwarded port. 'refused' (connect error) means the forward is
+ * actually gone; 'timeout' means it exists but answered slowly — on a
+ * congested jump-host link that is NOT evidence of a dead connection.
+ */
+function probeHttp(port: number): Promise<ProbeResult> {
   return new Promise((resolve) => {
+    let settled = false;
+    const settle = (result: ProbeResult) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
     const req = http.get(`http://127.0.0.1:${port}/`, (res) => {
       res.resume();
-      resolve(true);
+      settle('ok');
     });
-    req.on('error', () => resolve(false));
-    req.setTimeout(3_000, () => {
+    req.on('error', () => settle('refused'));
+    req.setTimeout(PROBE_TIMEOUT_MS, () => {
+      settle('timeout');
       req.destroy();
-      resolve(false);
     });
   });
 }
@@ -214,7 +230,7 @@ export class RemoteConnection {
         '-o',
         'ServerAliveInterval=15',
         '-o',
-        'ServerAliveCountMax=2',
+        'ServerAliveCountMax=4',
         this.hostAlias,
       ],
       30_000,
@@ -260,7 +276,7 @@ export class RemoteConnection {
           `remote serve-web exited (code ${code}) before becoming reachable`,
         );
       }
-      if (await probeHttp(this.localPort)) return;
+      if ((await probeHttp(this.localPort)) === 'ok') return;
       await delay(1_000);
     }
     throw new RemoteCodeError(
@@ -452,14 +468,24 @@ export class RemoteConnection {
 
   private async healthCheck(): Promise<void> {
     if (this.state !== 'serving' || this.localPort === null) return;
-    const ok = await probeHttp(this.localPort);
-    if (ok) {
+    const result = await probeHttp(this.localPort);
+    if (result === 'ok') {
       this.healthFailures = 0;
       return;
     }
+    if (result === 'timeout') {
+      // Slow ≠ dead. The SSH channel's own exit is the authority on a dead
+      // link; a sluggish HTTP answer through a jump host must not trigger a
+      // teardown loop that keeps killing a healthy server mid-load.
+      console.warn(
+        `[vsorch] ${this.hostAlias}: slow health probe (congested link?) — leaving the connection up`,
+      );
+      return;
+    }
+    // refused — the forward is really gone
     this.healthFailures += 1;
     if (this.healthFailures >= HEALTH_FAILURES_BEFORE_DROP) {
-      void this.handleDrop('forwarded port stopped responding');
+      void this.handleDrop('forwarded port refused connections');
     }
   }
 
