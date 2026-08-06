@@ -18,6 +18,18 @@ import { canBind, scanForFreePort } from './ports';
 const LOCAL_REMOTE_PORT_BASE = 46100;
 const LOCAL_REMOTE_PORT_RANGE = 40;
 
+/**
+ * Remote serve-web ports: explicit, scanned on the host by trial spawn.
+ * (`--port 0` is useless here — the real CLI echoes the *configured* port in
+ * its "Web UI available at" line, not the bound one, as seen on real hosts.)
+ */
+const REMOTE_SERVER_PORT_BASE = 45990;
+const REMOTE_SERVER_PORT_RANGE = 20;
+
+/** How long a fresh spawn gets to crash (bad port, bad flags) before we
+ *  treat the channel as live. */
+const SPAWN_GRACE_MS = 4_000;
+
 /** First-run serve-web may download the server component on the host. */
 const REMOTE_READY_TIMEOUT_MS = 240_000;
 const HEALTH_POLL_MS = 10_000;
@@ -25,8 +37,8 @@ const HEALTH_FAILURES_BEFORE_DROP = 2;
 const RECONNECT_ATTEMPTS = 2;
 const RECONNECT_BACKOFF_MS = 2_000;
 
-const REMOTE_READY_RE = /Web UI available at\s+http:\/\/127\.0\.0\.1:(\d+)/;
 const REMOTE_PID_RE = /VSORCH_RPID=(\d+)/;
+const ADDR_IN_USE_RE = /address already in use|EADDRINUSE|Address in use/i;
 
 export type RemoteConnectionState =
   | 'connecting'
@@ -98,9 +110,9 @@ function runSsh(
  * for any reason, stdin EOFs and the whole remote group is reaped. This is
  * the remote analogue of the local pgrep -g cleanup (§3.1).
  */
-function buildServeWrapper(codePath: string): string {
+function buildServeWrapper(codePath: string, remotePort: number): string {
   const q = shSingleQuote(codePath);
-  const serveCmd = `serve-web --host 127.0.0.1 --port 0 --server-data-dir "$HOME/.vsorch/server-data" --accept-server-license-terms --without-connection-token`;
+  const serveCmd = `serve-web --host 127.0.0.1 --port ${remotePort} --server-data-dir "$HOME/.vsorch/server-data" --accept-server-license-terms --without-connection-token`;
   return (
     // fd 3 duplicates the channel's stdin: POSIX shells give *background*
     // jobs /dev/null as stdin, so the watchdog must read via 3<&0 or it
@@ -122,6 +134,8 @@ function buildServeWrapper(codePath: string): string {
 export class RemoteConnection {
   private readonly ctlPath: string;
   private channel: ChildProcess | null = null;
+  private channelExitInfo: { code: number | null; output: string } | null =
+    null;
   private remotePid: number | null = null;
   private remotePort: number | null = null;
   private localPort: number | null = null;
@@ -209,9 +223,9 @@ export class RemoteConnection {
     // 2. Stable local port for this host (origin-scoped workbench state).
     this.localPort = await this.allocLocalPort();
 
-    // 3. Spawn serve-web on the host (port 0 → the host picks a free port and
-    //    prints it, so no remote scan / TOCTOU race).
-    const { remotePid, remotePort } = await this.spawnServeWeb();
+    // 3. Spawn serve-web on an explicit remote port, trial-scanning the
+    //    range — an address-in-use spawn crashes fast and we move on.
+    const { remotePid, remotePort } = await this.spawnOnFreePort();
     this.remotePid = remotePid;
     this.remotePort = remotePort;
 
@@ -230,14 +244,25 @@ export class RemoteConnection {
       throw this.classify(fwd.stderr, 'could not establish port forward');
     }
 
-    // 5. Confirm the workbench answers through the tunnel.
-    const deadline = Date.now() + 30_000;
+    // 5. Readiness = the workbench answering through the tunnel. The spawn's
+    //    output is deliberately NOT parsed for readiness: real binaries print
+    //    all sorts of banners and echo the *configured* port, so the HTTP
+    //    probe is the only trustworthy signal. Generous deadline — the first
+    //    run may download the server component on the host.
+    const deadline = Date.now() + REMOTE_READY_TIMEOUT_MS;
     while (Date.now() < deadline) {
+      if (this.channelExitInfo) {
+        const { code, output } = this.channelExitInfo;
+        throw this.classify(
+          output,
+          `remote serve-web exited (code ${code}) before becoming reachable`,
+        );
+      }
       if (await probeHttp(this.localPort)) return;
-      await delay(500);
+      await delay(1_000);
     }
     throw new RemoteCodeError(
-      `serve-web on "${this.hostAlias}" never became reachable through the forwarded port.`,
+      `serve-web on "${this.hostAlias}" never became reachable through the forwarded port (first run downloads the server component — retry if the host is slow).`,
       'unreachable',
       this.hostAlias,
     );
@@ -270,8 +295,57 @@ export class RemoteConnection {
     return port;
   }
 
-  private spawnServeWeb(): Promise<{ remotePid: number; remotePort: number }> {
+  /** Trial-spawn serve-web across the remote port range; the last-good port
+   *  is remembered per host so retries are rare. */
+  private async spawnOnFreePort(): Promise<{
+    remotePid: number;
+    remotePort: number;
+  }> {
+    const config = await readConfig();
+    const savedMap = (config.remoteServerPorts ?? {}) as Record<
+      string,
+      unknown
+    >;
+    const savedRaw = savedMap[this.hostAlias];
+    const saved = typeof savedRaw === 'number' ? savedRaw : null;
+
+    const candidates: number[] = [];
+    if (saved !== null) candidates.push(saved);
+    for (
+      let p = REMOTE_SERVER_PORT_BASE;
+      p < REMOTE_SERVER_PORT_BASE + REMOTE_SERVER_PORT_RANGE;
+      p++
+    ) {
+      if (p !== saved) candidates.push(p);
+    }
+
+    for (const port of candidates) {
+      const result = await this.trySpawn(port);
+      if (result === 'busy') continue;
+      if (port !== saved) {
+        await updateConfig({
+          remoteServerPorts: { ...savedMap, [this.hostAlias]: port },
+        });
+      }
+      return result;
+    }
+    throw new RemoteCodeError(
+      `no free serve-web port on "${this.hostAlias}" in ${REMOTE_SERVER_PORT_BASE}–${REMOTE_SERVER_PORT_BASE + REMOTE_SERVER_PORT_RANGE - 1}.`,
+      'unknown',
+      this.hostAlias,
+    );
+  }
+
+  /**
+   * Spawn serve-web on one explicit port. Resolves 'busy' if the spawn dies
+   * of address-in-use, resolves {pid, port} once the wrapper reported its pid
+   * and the process survived the grace window, rejects on anything else.
+   */
+  private trySpawn(
+    remotePort: number,
+  ): Promise<'busy' | { remotePid: number; remotePort: number }> {
     return new Promise((resolve, reject) => {
+      this.channelExitInfo = null;
       const channel = spawn(
         'ssh',
         [
@@ -279,7 +353,7 @@ export class RemoteConnection {
           '-S',
           this.ctlPath,
           this.hostAlias,
-          buildServeWrapper(this.codePath),
+          buildServeWrapper(this.codePath, remotePort),
         ],
         // stdin stays open on purpose: the remote wrapper watches it and
         // reaps the serve-web group when the channel dies.
@@ -288,58 +362,73 @@ export class RemoteConnection {
       this.channel = channel;
 
       let out = '';
-      let stderr = '';
       let settled = false;
       let remotePid: number | null = null;
+      let graceTimer: NodeJS.Timeout | null = null;
 
-      const settle = (
-        err: Error | null,
-        result?: { remotePid: number; remotePort: number },
-      ) => {
+      // The wrapper echoes VSORCH_RPID as its first output; give the channel
+      // (potentially via a slow ProxyJump) a while to produce it.
+      const rpidTimer = setTimeout(() => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
-        if (err) reject(err);
-        else resolve(result as { remotePid: number; remotePort: number });
+        try {
+          channel.kill('SIGTERM');
+        } catch {
+          // already gone
+        }
+        reject(
+          this.classify(out, 'remote serve-web never started (no pid report)'),
+        );
+      }, 45_000);
+
+      const finishAlive = () => {
+        if (settled || remotePid === null) return;
+        settled = true;
+        clearTimeout(rpidTimer);
+        resolve({ remotePid, remotePort });
       };
 
-      channel.stdout?.on('data', (chunk: Buffer) => {
+      const onOutput = (chunk: Buffer) => {
         out += chunk.toString();
-        const pidMatch = REMOTE_PID_RE.exec(out);
-        if (pidMatch) remotePid = Number(pidMatch[1]);
-        const ready = REMOTE_READY_RE.exec(out);
-        if (ready && remotePid !== null) {
-          settle(null, { remotePid, remotePort: Number(ready[1]) });
+        if (remotePid === null) {
+          const pidMatch = REMOTE_PID_RE.exec(out);
+          if (pidMatch) {
+            remotePid = Number(pidMatch[1]);
+            // Survive the grace window (address-in-use crashes fast) → good.
+            graceTimer = setTimeout(finishAlive, SPAWN_GRACE_MS);
+          }
         }
+      };
+      channel.stdout?.on('data', onOutput);
+      channel.stderr?.on('data', onOutput);
+
+      channel.on('error', (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(rpidTimer);
+        reject(this.classify(err.message, 'could not run ssh'));
       });
-      channel.stderr?.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString();
-      });
-      channel.on('error', (err) =>
-        settle(this.classify(err.message, 'could not run ssh')),
-      );
       channel.on('exit', (code) => {
+        this.channelExitInfo = { code, output: out.slice(-500) };
+        if (this.channel === channel) this.channel = null;
         if (!settled) {
-          settle(
-            this.classify(
-              stderr || out,
-              `remote serve-web exited early (code ${code})`,
-            ),
-          );
+          settled = true;
+          clearTimeout(rpidTimer);
+          if (graceTimer) clearTimeout(graceTimer);
+          if (ADDR_IN_USE_RE.test(out)) {
+            resolve('busy');
+          } else {
+            reject(
+              this.classify(
+                out,
+                `remote serve-web exited early (code ${code})`,
+              ),
+            );
+          }
         } else {
           this.onChannelExit();
         }
       });
-
-      const timer = setTimeout(() => {
-        settle(
-          new RemoteCodeError(
-            `timed out waiting for serve-web on "${this.hostAlias}" (first run downloads the server component — retry if the host is slow).`,
-            'unreachable',
-            this.hostAlias,
-          ),
-        );
-      }, REMOTE_READY_TIMEOUT_MS);
     });
   }
 
