@@ -217,10 +217,12 @@ body {
   box-shadow: inset 0 2px 0 0 #0078d4;
 }
 
+/* Pane chrome sits on the LEFT: VS Code keeps its own actions top-right,
+   while the top-left stays clean. */
 .pane-close {
   position: absolute;
   top: 4px;
-  right: 6px;
+  left: 6px;
   z-index: 4;
   width: 18px;
   height: 18px;
@@ -248,7 +250,7 @@ body {
 .pane-label {
   position: absolute;
   top: 6px;
-  right: 30px;
+  left: 30px;
   z-index: 3;
   padding: 1px 7px;
   border-radius: 8px;
