@@ -1,10 +1,12 @@
 import { app, BrowserWindow, ipcMain, Menu, MenuItemConstructorOptions } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
+import { readConfig, updateConfig } from './config';
 import { provisionExtensions, SERVER_DATA_DIR } from './extensionsProvisioner';
 import { RemoteConnectionManager } from './remoteConnection';
 import { RemoteResolution, resolveRemotes } from './remotes';
 import { ServeWebManager } from './serveWebManager';
+import { isValidSession, Session } from './session';
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (started) {
@@ -148,6 +150,14 @@ const remoteManager = new RemoteConnectionManager((status) => {
       (status.error ? ` (${status.error.kind}: ${status.error.message})` : ''),
   );
   broadcast('vsorch:remote-status', status);
+});
+
+ipcMain.handle('vsorch:get-session', async () => {
+  const config = await readConfig();
+  return isValidSession(config.session) ? config.session : null;
+});
+ipcMain.handle('vsorch:save-session', async (_event, session: Session) => {
+  await updateConfig({ session });
 });
 
 ipcMain.handle('vsorch:get-base-url', () => serveWeb.baseUrl);

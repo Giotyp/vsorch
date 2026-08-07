@@ -2,10 +2,15 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 import type { RemoteStatus } from './remoteConnection';
 import type { RemoteResolution } from './remotes';
+import type { Session } from './session';
 
 export interface VsorchApi {
   /** Resolves the serve-web base URL, or null if the server isn't ready yet. */
   getBaseUrl(): Promise<string | null>;
+  /** Saved pane composition + layout from the previous run, or null if none. */
+  getSession(): Promise<Session | null>;
+  /** Persist the current pane composition + layout for the next launch. */
+  saveSession(session: Session): Promise<void>;
   /** Fires once the shared serve-web server is ready. */
   onServerReady(callback: (baseUrl: string) => void): void;
   /** Fires if the server failed to start. */
@@ -28,6 +33,8 @@ export interface VsorchApi {
 
 const api: VsorchApi = {
   getBaseUrl: () => ipcRenderer.invoke('vsorch:get-base-url'),
+  getSession: () => ipcRenderer.invoke('vsorch:get-session'),
+  saveSession: (session) => ipcRenderer.invoke('vsorch:save-session', session),
   onServerReady: (callback) => {
     ipcRenderer.on('vsorch:server-ready', (_event, baseUrl: string) =>
       callback(baseUrl),

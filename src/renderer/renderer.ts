@@ -2,6 +2,7 @@ import './styles.css';
 import type { RemoteStatus } from '../remoteConnection';
 import type { RemoteResolution } from '../remotes';
 import type { VsorchApi } from '../preload';
+import type { Session } from '../session';
 import { LayoutKind, rowsFor } from './layout';
 
 declare global {
@@ -25,6 +26,22 @@ const warningDismiss = document.getElementById(
 
 let baseUrl: string | null = null;
 let layout: LayoutKind = 'row';
+
+// --- session persistence ---
+//
+// Pane composition (local vs. remote+host, in layout order) and layout kind
+// are saved to ~/.vsorch/config.json on every change and replayed on the
+// next launch. Sizes are deliberately not persisted — they already reset to
+// equal on every pane add/close/layout change, so there's no steady state to
+// save.
+
+let savedSession: Session | null = null;
+const sessionReady: Promise<void> = window.vsorch.getSession().then((s) => {
+  savedSession = s;
+});
+/** Suppresses persistSession() while replaying a saved session, so a crash
+ *  mid-restore can't overwrite the file with a partial pane list. */
+let restoringSession = false;
 
 // --- resizable dividers ---
 //
@@ -231,6 +248,14 @@ function applyLayout(): void {
   layoutAxis({ container: panesEl, axis, weights }, paneEls);
 }
 
+function persistSession(): void {
+  if (restoringSession) return;
+  void window.vsorch.saveSession({
+    layout,
+    panes: panes.map((p) => (p.host ? { host: p.host } : {})),
+  });
+}
+
 function setActivePane(paneEl: HTMLDivElement): void {
   for (const active of Array.from(panesEl.querySelectorAll('.pane.active'))) {
     active.classList.remove('active');
@@ -267,6 +292,7 @@ function createPane(host?: string): PaneRec {
   panes.push(rec);
   applyLayout();
   setActivePane(el);
+  persistSession();
   return rec;
 }
 
@@ -280,6 +306,7 @@ function closePane(rec: PaneRec): void {
   if (wasActive && panes.length > 0) {
     setActivePane(panes[panes.length - 1].el);
   }
+  persistSession();
   // Last pane on a remote host → tear down its connection (forward, remote
   // server, master); the ☁ menu can bring it back up on demand.
   if (rec.host && panesOf(rec.host).length === 0) {
@@ -384,7 +411,14 @@ function panesOf(host: string): PaneRec[] {
   return panes.filter((p) => p.host === host);
 }
 
-async function addRemotePane(host: string): Promise<void> {
+/**
+ * Create the pane immediately (so it takes its slot in the layout) and kick
+ * off the connection in the background. Used both for user-initiated opens
+ * (remotes are already resolved by then — the ☁ menu entry is disabled
+ * otherwise) and for session restore (remotes may still be resolving;
+ * connectRemotePane waits rather than racing main's resolution).
+ */
+function addRemotePane(host: string): void {
   const rec = createPane(host);
   const known = remoteStatuses.get(host);
   if (known?.state === 'serving' && known.origin) {
@@ -392,6 +426,11 @@ async function addRemotePane(host: string): Promise<void> {
     return;
   }
   setOverlay(rec, { text: `connecting to ${host}…` });
+  void connectRemotePane(host);
+}
+
+async function connectRemotePane(host: string): Promise<void> {
+  await waitForRemotesResolved();
   const status = await window.vsorch.openRemotePane(host);
   applyRemoteStatus(status);
 }
@@ -508,17 +547,34 @@ function renderRemotesMenu(): void {
       entry.addEventListener('click', (event) => {
         event.stopPropagation();
         closeMenus();
-        void addRemotePane(host);
+        addRemotePane(host);
       });
     }
     remotesMenu.appendChild(entry);
   }
 }
 
+let remotesResolvedOnce = false;
+let remotesResolvedWaiters: Array<() => void> = [];
+
+/** Resolves once remote resolution has completed at least once (possibly
+ *  with zero remotes) — used to sequence session-restored remote panes
+ *  behind main's SSH resolution without blocking anything else. */
+function waitForRemotesResolved(): Promise<void> {
+  if (remotesResolvedOnce) return Promise.resolve();
+  return new Promise((resolve) => remotesResolvedWaiters.push(resolve));
+}
+
 function onRemotesResolved(remotes: RemoteResolution[]): void {
   remoteList = remotes;
   remotesBtn.disabled = remotes.length === 0;
   renderRemotesMenu();
+  if (!remotesResolvedOnce) {
+    remotesResolvedOnce = true;
+    const waiters = remotesResolvedWaiters;
+    remotesResolvedWaiters = [];
+    for (const resolve of waiters) resolve();
+  }
 }
 
 // --- menus ---
@@ -558,18 +614,41 @@ function setLayout(kind: LayoutKind): void {
     option.classList.toggle('active', option.dataset.layout === kind);
   }
   applyLayout();
+  persistSession();
 }
 
 // --- server bring-up ---
 
-function onServerReady(url: string): void {
+/**
+ * Replay a saved pane list in order. Local panes attach immediately; remote
+ * panes take their layout slot immediately too, but connectRemotePane (via
+ * waitForRemotesResolved) defers the actual connection attempt until main
+ * has finished resolving hosts, so this never blocks on SSH.
+ */
+function restoreSession(session: Session): void {
+  restoringSession = true;
+  setLayout(session.layout);
+  for (const p of session.panes) {
+    if (p.host) addRemotePane(p.host);
+    else addLocalPane();
+  }
+  restoringSession = false;
+  persistSession();
+}
+
+async function onServerReady(url: string): Promise<void> {
   if (baseUrl) return; // already initialized
   baseUrl = url;
   statusEl.remove();
   addPaneBtn.disabled = false;
   layoutBtn.disabled = false;
-  setLayout(layout);
-  addLocalPane();
+  await sessionReady;
+  if (savedSession && savedSession.panes.length > 0) {
+    restoreSession(savedSession);
+  } else {
+    setLayout(layout);
+    addLocalPane();
+  }
 }
 
 addPaneBtn.addEventListener('click', () => addLocalPane());

@@ -75,6 +75,18 @@ different numbers of panes (a shared divider wouldn't land on a pane
 boundary in every row). Sizes reset to equal whenever a pane is added/closed
 or the layout changes.
 
+## Session persistence
+
+Pane composition (local, or remote+host) and the chosen layout are saved to
+`~/.vsorch/config.json` (`session` key) on every add/close/layout change and
+replayed on the next launch, in the same order. Restoring never blocks local
+pane bring-up on remote SSH resolution: local panes attach immediately,
+while a restored remote pane shows its usual "connecting…" overlay until its
+host resolves. A host removed from `remotes` (or currently unreachable)
+surfaces the normal "unavailable" overlay with a manual reconnect button.
+Pane sizes are not persisted — they always reset to equal on restore, same
+as on any other add/close/layout change.
+
 ## Remote hosts (experimental)
 
 Remotes are declared in `~/.vsorch/config.json`. At startup vsorch resolves
@@ -133,6 +145,7 @@ src/
 ├── serveWebManager.ts        # spawn/supervise the local serve-web, readiness, cleanup
 ├── remotes.ts                # resolve configured remote hosts (SSH, code binary)
 ├── remoteConnection.ts       # per-host ControlMaster + remote serve-web + forward
+├── session.ts                # saved pane composition + layout (types, validation)
 ├── preload.ts                # contextBridge: server URL + events → renderer
 └── renderer/
     ├── index.html            # top bar + #panes container
@@ -149,6 +162,5 @@ src/
 - serve-web runs the web/server workbench: workspace extensions (language
   servers, linters, formatters) work; some desktop-only UI extensions won't
   activate.
-- No session persistence yet — panes aren't remembered across restarts.
 - If a stale `code` CLI shadows the desktop app on PATH, vsorch serves that
   older version instead — a banner warns when this is detected.
