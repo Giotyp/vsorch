@@ -184,6 +184,37 @@ body {
   color: #ffffff;
 }
 
+#warning-banner {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 12px;
+  background: #4a3a0a;
+  color: #f0c674;
+  font-size: 12px;
+  border-bottom: 1px solid #3c3c3c;
+}
+
+#warning-banner.hidden {
+  display: none;
+}
+
+#warning-dismiss {
+  border: none;
+  background: transparent;
+  color: #f0c674;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+#warning-dismiss:hover {
+  color: #fff;
+}
+
 #panes {
   flex: 1;
   display: grid;

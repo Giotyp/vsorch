@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, MenuItemConstructorOptions } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 import { provisionExtensions, SERVER_DATA_DIR } from './extensionsProvisioner';
@@ -9,6 +9,67 @@ import { ServeWebManager } from './serveWebManager';
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (started) {
   app.quit();
+}
+
+/**
+ * Electron's implicit default menu binds Cmd+W to "Close Window" (role:
+ * 'close') on macOS, which would silently close the whole vsorch window (and
+ * every pane) instead of letting the focused workbench handle Cmd+W itself
+ * (e.g. close editor). vsorch has its own per-pane close button, so the app
+ * doesn't need a window-closing accelerator — this template is the Electron
+ * default minus that one binding. Edit-role items are kept: macOS routes
+ * Cmd+C/V/X/Z to the focused webContents (including panes) through them.
+ */
+function setAppMenu(): void {
+  const isMac = process.platform === 'darwin';
+  const template: MenuItemConstructorOptions[] = [
+    ...(isMac
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: 'about' },
+              { type: 'separator' },
+              { role: 'services' },
+              { type: 'separator' },
+              { role: 'hide' },
+              { role: 'hideOthers' },
+              { role: 'unhide' },
+              { type: 'separator' },
+              { role: 'quit' },
+            ] as MenuItemConstructorOptions[],
+          },
+        ]
+      : [{ label: 'File', submenu: [{ role: 'quit' }] as MenuItemConstructorOptions[] }]),
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' },
+      ],
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+      ],
+    },
+    {
+      label: 'Window',
+      submenu: isMac
+        ? [{ role: 'minimize' }, { role: 'zoom' }, { type: 'separator' }, { role: 'front' }]
+        : [{ role: 'minimize' }],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 const serveWeb = new ServeWebManager();
@@ -47,6 +108,9 @@ const startServer = async () => {
     await provisionExtensions();
     const baseUrl = await serveWeb.start(SERVER_DATA_DIR);
     broadcast('vsorch:server-ready', baseUrl);
+    if (serveWeb.versionWarning) {
+      broadcast('vsorch:server-warning', serveWeb.versionWarning);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('[vsorch] serve-web failed to start:', message);
@@ -108,6 +172,7 @@ ipcMain.handle('vsorch:open-remote-pane', async (_event, hostAlias: string) => {
 });
 
 app.on('ready', () => {
+  setAppMenu();
   createWindow();
   // Local bring-up and remote resolution run in parallel — SSH latency (or a
   // dead remote) must never delay the local workbench.

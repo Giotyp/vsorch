@@ -17,6 +17,11 @@ const layoutBtn = document.getElementById('layout-btn') as HTMLButtonElement;
 const layoutMenu = document.getElementById('layout-menu') as HTMLDivElement;
 const remotesBtn = document.getElementById('remotes-btn') as HTMLButtonElement;
 const remotesMenu = document.getElementById('remotes-menu') as HTMLDivElement;
+const warningBanner = document.getElementById('warning-banner') as HTMLDivElement;
+const warningText = document.getElementById('warning-text') as HTMLSpanElement;
+const warningDismiss = document.getElementById(
+  'warning-dismiss',
+) as HTMLButtonElement;
 
 let baseUrl: string | null = null;
 let layout: LayoutKind = 'row';
@@ -393,8 +398,18 @@ function onServerError(message: string): void {
   statusEl.textContent = `VS Code failed to start: ${message}`;
 }
 
+function onServerWarning(message: string): void {
+  warningText.textContent = message;
+  warningBanner.classList.remove('hidden');
+}
+
+warningDismiss.addEventListener('click', () => {
+  warningBanner.classList.add('hidden');
+});
+
 window.vsorch.onServerReady(onServerReady);
 window.vsorch.onServerError(onServerError);
+window.vsorch.onServerWarning(onServerWarning);
 window.vsorch.onRemotesResolved(onRemotesResolved);
 window.vsorch.onRemoteStatus(applyRemoteStatus);
 

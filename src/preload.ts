@@ -10,6 +10,8 @@ export interface VsorchApi {
   onServerReady(callback: (baseUrl: string) => void): void;
   /** Fires if the server failed to start. */
   onServerError(callback: (message: string) => void): void;
+  /** Fires once, alongside server-ready, if a version mismatch was detected. */
+  onServerWarning(callback: (message: string) => void): void;
   /** Per-remote resolution results so far (empty until resolution ran). */
   getRemotes(): Promise<RemoteResolution[]>;
   /** Fires when all configured remotes finished resolving. */
@@ -33,6 +35,11 @@ const api: VsorchApi = {
   },
   onServerError: (callback) => {
     ipcRenderer.on('vsorch:server-error', (_event, message: string) =>
+      callback(message),
+    );
+  },
+  onServerWarning: (callback) => {
+    ipcRenderer.on('vsorch:server-warning', (_event, message: string) =>
       callback(message),
     );
   },

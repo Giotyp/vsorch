@@ -32,6 +32,60 @@ const CODE_CLI_CANDIDATES = [
   '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code',
 ];
 
+/**
+ * `code serve-web` always runs the server component matching its own
+ * commit — it downloads one to `~/.vscode/cli/serve-web/<commit>` on demand
+ * — so a version mismatch can't happen against *that* binary. It can happen
+ * against the desktop *app*: if PATH resolves a different, stale `code` CLI
+ * (e.g. a leftover shim from a previous install) before this canonical
+ * path, vsorch serves an older VS Code than the one the user has open.
+ */
+const DESKTOP_APP_CLI =
+  '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code';
+
+interface CliVersionInfo {
+  version: string;
+  commit: string;
+}
+
+function getCliVersion(cli: string): CliVersionInfo | null {
+  try {
+    const result = spawnSync(cli, ['--version'], {
+      encoding: 'utf8',
+      timeout: 5_000,
+    });
+    const lines = result.stdout?.trim().split('\n');
+    if (lines && lines.length >= 2) {
+      return { version: lines[0].trim(), commit: lines[1].trim() };
+    }
+  } catch {
+    // unreadable or not executable — treat as unknown
+  }
+  return null;
+}
+
+/**
+ * If the resolved `code` CLI isn't the desktop app's own binary and reports
+ * a different commit, warn: vsorch will serve that (possibly stale) version
+ * instead of the VS Code the user actually has installed.
+ */
+async function checkVersionDrift(resolvedCli: string): Promise<string | null> {
+  if (path.resolve(resolvedCli) === DESKTOP_APP_CLI) return null;
+  try {
+    await fs.access(DESKTOP_APP_CLI);
+  } catch {
+    return null; // no desktop app at the canonical path to compare against
+  }
+  const resolved = getCliVersion(resolvedCli);
+  const desktop = getCliVersion(DESKTOP_APP_CLI);
+  if (!resolved || !desktop || resolved.commit === desktop.commit) return null;
+  return (
+    `vsorch is serving VS Code ${resolved.version} from "${resolvedCli}", which ` +
+    `differs from the installed desktop app (${desktop.version}). Panes may be ` +
+    `out of date or fail to load — check for a stale "code" CLI earlier on PATH.`
+  );
+}
+
 async function readSavedPort(): Promise<number | null> {
   try {
     const raw = await fs.readFile(CONFIG_PATH, 'utf8');
@@ -132,6 +186,9 @@ export class ServeWebManager {
   /** Base URL (e.g. http://127.0.0.1:9888) once the server is ready. */
   baseUrl: string | null = null;
 
+  /** Set if the resolved `code` CLI doesn't match the desktop app's version. */
+  versionWarning: string | null = null;
+
   /**
    * Start `code serve-web` bound to 127.0.0.1 and resolve with the base URL
    * once the workbench is reachable. Readiness is detected primarily from the
@@ -146,6 +203,8 @@ export class ServeWebManager {
 
     const port = await getStablePort();
     const cli = await resolveCodeCli();
+    this.versionWarning = await checkVersionDrift(cli);
+    if (this.versionWarning) console.warn(`[vsorch] ${this.versionWarning}`);
     const args = [
       'serve-web',
       '--host',

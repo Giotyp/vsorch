@@ -143,7 +143,6 @@ src/
   servers, linters, formatters) work; some desktop-only UI extensions won't
   activate.
 - No resizable dividers or session persistence (panes aren't remembered
-  across restarts) yet. Keyboard chords (Cmd+W/N/T) may be captured by
-  Electron before the pane sees them.
-- If a pane won't load, check that the auto-installed serve-web server version
-  matches the installed VS Code (`~/.vscode/cli/serve-web` can drift).
+  across restarts) yet.
+- If a stale `code` CLI shadows the desktop app on PATH, vsorch serves that
+  older version instead — a banner warns when this is detected.
