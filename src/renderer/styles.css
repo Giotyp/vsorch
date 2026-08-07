@@ -218,9 +218,40 @@ body {
 #panes {
   flex: 1;
   display: grid;
-  gap: 1px;
+  gap: 0;
   background: #333;
   min-height: 0;
+}
+
+/* Both #panes (outer axis) and each `grid` row (inner axis, nested one
+   level) are single-row-or-column grids built by layoutAxis(). */
+.axis-container {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+}
+
+.divider {
+  background: #333;
+  z-index: 3;
+}
+
+.divider:hover {
+  background: #0078d4;
+}
+
+.divider-col {
+  cursor: col-resize;
+}
+
+.divider-row {
+  cursor: row-resize;
+}
+
+/* Webviews are separate rendered surfaces that would otherwise swallow
+   mousemove once the cursor crosses into one mid-drag. */
+body.resizing .pane webview {
+  pointer-events: none;
 }
 
 #status {

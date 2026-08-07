@@ -2,7 +2,7 @@ import './styles.css';
 import type { RemoteStatus } from '../remoteConnection';
 import type { RemoteResolution } from '../remotes';
 import type { VsorchApi } from '../preload';
-import { LayoutKind, planLayout } from './layout';
+import { LayoutKind, rowsFor } from './layout';
 
 declare global {
   interface Window {
@@ -26,6 +26,142 @@ const warningDismiss = document.getElementById(
 let baseUrl: string | null = null;
 let layout: LayoutKind = 'row';
 
+// --- resizable dividers ---
+//
+// Every axis (the outer row/column layouts, and — nested — each row of the
+// grid layout) is a single-row-or-column CSS grid: panes on odd tracks,
+// draggable `.divider` elements on even tracks between them. `layoutAxis`
+// builds one such grid from a weights array; `grid` layout nests one outer
+// axis-grid (row heights) inside which each row is its own axis-grid (that
+// row's column widths) — independent weights per row, so dividers always
+// have an unambiguous pane boundary to sit on.
+
+type Axis = 'row' | 'column';
+
+interface AxisGrid {
+  container: HTMLElement;
+  axis: Axis;
+  /** fr weights along `axis`, one per item — mutated in place while dragging. */
+  weights: number[];
+}
+
+const DIVIDER_SIZE = 6; // px
+const MIN_PANE_PX = 80;
+
+function applyAxisTemplate(grid: AxisGrid): void {
+  const template = grid.weights.map((w) => `${w}fr`).join(` ${DIVIDER_SIZE}px `);
+  if (grid.axis === 'column') {
+    grid.container.style.gridTemplateColumns = template;
+  } else {
+    grid.container.style.gridTemplateRows = template;
+  }
+}
+
+function startAxisDrag(event: MouseEvent, grid: AxisGrid, index: number): void {
+  event.preventDefault();
+  event.stopPropagation();
+  const rect = grid.container.getBoundingClientRect();
+  const containerSize = grid.axis === 'column' ? rect.width : rect.height;
+  const totalWeight = grid.weights.reduce((a, b) => a + b, 0);
+  const minWeight = (MIN_PANE_PX / containerSize) * totalWeight;
+  const startPos = grid.axis === 'column' ? event.clientX : event.clientY;
+  const startA = grid.weights[index];
+  const startB = grid.weights[index + 1];
+
+  document.body.classList.add('resizing');
+  document.body.style.cursor = grid.axis === 'column' ? 'col-resize' : 'row-resize';
+
+  const onMove = (e: MouseEvent) => {
+    const pos = grid.axis === 'column' ? e.clientX : e.clientY;
+    const deltaWeight = ((pos - startPos) / containerSize) * totalWeight;
+    const a = startA + deltaWeight;
+    const b = startB - deltaWeight;
+    if (a < minWeight || b < minWeight) return;
+    grid.weights[index] = a;
+    grid.weights[index + 1] = b;
+    applyAxisTemplate(grid);
+  };
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    document.body.classList.remove('resizing');
+    document.body.style.cursor = '';
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+/**
+ * Lay `items` out along `grid.axis` inside `grid.container`, with a
+ * draggable divider between each pair. Reparents `items` into the container
+ * (a no-op if already there) — safe to call on elements already connected
+ * elsewhere in the live tree, since a single `appendChild` move never
+ * disconnects them (which would reload a pane's webview).
+ */
+function layoutAxis(grid: AxisGrid, items: HTMLElement[]): void {
+  grid.container.classList.add('axis-container');
+  applyAxisTemplate(grid);
+  if (grid.axis === 'column') {
+    grid.container.style.gridTemplateRows = '1fr';
+  } else {
+    grid.container.style.gridTemplateColumns = '1fr';
+  }
+
+  items.forEach((item, i) => {
+    grid.container.appendChild(item);
+    const track = String(2 * i + 1);
+    if (grid.axis === 'column') {
+      item.style.gridColumn = track;
+      item.style.gridRow = '1';
+    } else {
+      item.style.gridRow = track;
+      item.style.gridColumn = '1';
+    }
+  });
+
+  for (let i = 0; i < items.length - 1; i++) {
+    const divider = document.createElement('div');
+    divider.className = `divider ${grid.axis === 'column' ? 'divider-col' : 'divider-row'}`;
+    const track = String(2 * i + 2);
+    if (grid.axis === 'column') {
+      divider.style.gridColumn = track;
+      divider.style.gridRow = '1';
+    } else {
+      divider.style.gridRow = track;
+      divider.style.gridColumn = '1';
+    }
+    divider.addEventListener('mousedown', (event) => startAxisDrag(event, grid, i));
+    grid.container.appendChild(divider);
+  }
+}
+
+/** fr weights for row/column layouts — one per pane, reset on count/kind change. */
+let colWeights: number[] = [];
+let rowWeights: number[] = [];
+let weightsFor = ''; // `${layout}:${count}` the weights above currently match
+
+function ensureWeights(): void {
+  const key = `${layout}:${panes.length}`;
+  if (weightsFor === key) return;
+  weightsFor = key;
+  if (layout === 'row') colWeights = new Array(panes.length).fill(1);
+  else if (layout === 'column') rowWeights = new Array(panes.length).fill(1);
+}
+
+/** grid layout: one row-height weight per row, one column-width weight array per row. */
+let gridRowWeights: number[] = [];
+let gridColWeights: number[][] = [];
+let gridWeightsFor = ''; // `grid:${count}` the weights above currently match
+
+function ensureGridWeights(): void {
+  const key = `grid:${panes.length}`;
+  if (gridWeightsFor === key) return;
+  gridWeightsFor = key;
+  const sizes = rowsFor('grid', panes.length);
+  gridRowWeights = new Array(sizes.length).fill(1);
+  gridColWeights = sizes.map((size) => new Array(size).fill(1));
+}
+
 interface PaneRec {
   el: HTMLDivElement;
   /** undefined → local pane; set → remote pane on this host. */
@@ -38,17 +174,61 @@ const panes: PaneRec[] = [];
 let remoteList: RemoteResolution[] = [];
 const remoteStatuses = new Map<string, RemoteStatus>();
 
-// --- layout (never re-parents panes; CSS grid placement only) ---
+// --- layout ---
 
+/**
+ * Rebuild the pane tree for the current layout. `stale` (old dividers, and
+ * — after a `grid` render — old `.grid-row` wrappers) is collected up front
+ * but only removed once every live pane has moved to its new home, so a
+ * pane is never fully disconnected from the document (which would reload
+ * its webview): each move is a direct `appendChild` between two containers
+ * that are already connected, never a remove-then-later-reinsert.
+ */
 function applyLayout(): void {
-  const plan = planLayout(layout, panes.length);
-  panesEl.style.gridTemplateColumns = `repeat(${plan.columns}, 1fr)`;
-  panesEl.style.gridTemplateRows = `repeat(${plan.rows}, 1fr)`;
-  panes.forEach((pane, i) => {
-    const p = plan.placements[i];
-    pane.el.style.gridRow = String(p.row);
-    pane.el.style.gridColumn = `${p.columnStart} / span ${p.columnSpan}`;
-  });
+  const stale = Array.from(panesEl.children).filter(
+    (el) => !el.classList.contains('pane'),
+  );
+
+  if (layout === 'grid') {
+    ensureGridWeights();
+    const sizes = rowsFor('grid', panes.length);
+    const paneEls = panes.map((p) => p.el);
+    const rowsOfPanes: HTMLDivElement[][] = [];
+    let cursor = 0;
+    for (const size of sizes) {
+      rowsOfPanes.push(paneEls.slice(cursor, cursor + size));
+      cursor += size;
+    }
+
+    const wrappers = rowsOfPanes.map(() => {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'grid-row';
+      return wrapper;
+    });
+    // Wrappers join the live tree first, then panes move straight into them.
+    for (const wrapper of wrappers) panesEl.appendChild(wrapper);
+    rowsOfPanes.forEach((rowPanes, i) => {
+      for (const el of rowPanes) wrappers[i].appendChild(el);
+    });
+    for (const el of stale) el.remove();
+
+    rowsOfPanes.forEach((rowPanes, rowIndex) => {
+      layoutAxis(
+        { container: wrappers[rowIndex], axis: 'column', weights: gridColWeights[rowIndex] },
+        rowPanes,
+      );
+    });
+    layoutAxis({ container: panesEl, axis: 'row', weights: gridRowWeights }, wrappers);
+    return;
+  }
+
+  ensureWeights();
+  const axis: Axis = layout === 'row' ? 'column' : 'row';
+  const weights = layout === 'row' ? colWeights : rowWeights;
+  const paneEls = panes.map((p) => p.el);
+  for (const el of paneEls) panesEl.appendChild(el); // pull out of any grid-row wrapper
+  for (const el of stale) el.remove();
+  layoutAxis({ container: panesEl, axis, weights }, paneEls);
 }
 
 function setActivePane(paneEl: HTMLDivElement): void {

@@ -68,6 +68,13 @@ column** (stacked), or **grid** (near-square — e.g. 3 panes become 2 on top
 and 1 spanning the bottom row). Layouts are applied with CSS grid, so
 rearranging never reloads a pane.
 
+Drag the thin divider between two panes to resize them (min 80px each) in
+any layout. **Grid** resizes both axes independently — each row has its own
+column dividers, plus dividers between rows — since its rows can hold
+different numbers of panes (a shared divider wouldn't land on a pane
+boundary in every row). Sizes reset to equal whenever a pane is added/closed
+or the layout changes.
+
 ## Remote hosts (experimental)
 
 Remotes are declared in `~/.vsorch/config.json`. At startup vsorch resolves
@@ -142,7 +149,6 @@ src/
 - serve-web runs the web/server workbench: workspace extensions (language
   servers, linters, formatters) work; some desktop-only UI extensions won't
   activate.
-- No resizable dividers or session persistence (panes aren't remembered
-  across restarts) yet.
+- No session persistence yet — panes aren't remembered across restarts.
 - If a stale `code` CLI shadows the desktop app on PATH, vsorch serves that
   older version instead — a banner warns when this is detected.
