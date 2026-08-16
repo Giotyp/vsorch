@@ -1,5 +1,6 @@
 import { ChildProcess, spawn } from 'node:child_process';
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -176,7 +177,12 @@ export class RemoteConnection {
       .update(hostAlias)
       .digest('hex')
       .slice(0, 10);
-    this.ctlPath = path.join(os.tmpdir(), `vsorch-${hash}.ctl`);
+    // Per-process socket path. Two app instances (two windows) can each hold an
+    // independent ControlMaster to the SAME host without fighting over one
+    // control socket, and a socket left behind by a crashed run (a different
+    // pid) can never block a fresh start — both were single points of failure
+    // when the path was keyed on the host alone.
+    this.ctlPath = path.join(os.tmpdir(), `vsorch-${process.pid}-${hash}.ctl`);
   }
 
   status(): RemoteStatus {
@@ -220,24 +226,7 @@ export class RemoteConnection {
 
   private async bringUp(): Promise<void> {
     // 1. ControlMaster (through the user's own ~/.ssh/config ProxyJump).
-    const master = await runSsh(
-      [
-        '-M',
-        '-N',
-        '-f',
-        '-S',
-        this.ctlPath,
-        '-o',
-        'ServerAliveInterval=15',
-        '-o',
-        'ServerAliveCountMax=4',
-        this.hostAlias,
-      ],
-      30_000,
-    );
-    if (master.code !== 0) {
-      throw this.classify(master.stderr, 'could not open SSH connection');
-    }
+    await this.openMaster();
 
     // 2+3. One per-host port, free on both ends: serve-web binds it on the
     //    host, and the same number is forwarded locally (see REMOTE_PORT_BASE
@@ -287,6 +276,61 @@ export class RemoteConnection {
       'unreachable',
       this.hostAlias,
     );
+  }
+
+  /**
+   * Open the ControlMaster, tolerating a socket left behind by a crashed run
+   * or a teardown whose `-O exit` never landed. Without this, `ssh -M` aborts
+   * with "ControlSocket … already exists" and the connection can't even be
+   * pushed. Clears a stale/own socket first and retries once for a transient
+   * SSH hiccup.
+   */
+  private async openMaster(): Promise<void> {
+    const openArgs = [
+      '-M',
+      '-N',
+      '-f',
+      '-S',
+      this.ctlPath,
+      '-o',
+      'ServerAliveInterval=15',
+      '-o',
+      'ServerAliveCountMax=4',
+      this.hostAlias,
+    ];
+    let last: { code: number | null; stderr: string } = {
+      code: null,
+      stderr: '',
+    };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await this.clearStaleMaster();
+      last = await runSsh(openArgs, 30_000);
+      if (last.code === 0) return;
+      await delay(500);
+    }
+    throw this.classify(last.stderr, 'could not open SSH connection');
+  }
+
+  /**
+   * Remove our control socket unless a live master already owns it. The path is
+   * per-process, so any socket here is our own — from a prior bringUp/reconnect
+   * in this process, or a same-pid leftover. If a master is still live, reclaim
+   * the path by exiting it so the fresh `-M` owns a clean socket.
+   */
+  private async clearStaleMaster(): Promise<void> {
+    try {
+      await fs.stat(this.ctlPath);
+    } catch {
+      return; // nothing there — the common case
+    }
+    const check = await runSsh(
+      ['-S', this.ctlPath, '-O', 'check', this.hostAlias],
+      8_000,
+    );
+    if (check.code === 0) {
+      await runSsh(['-S', this.ctlPath, '-O', 'exit', this.hostAlias], 8_000);
+    }
+    await fs.rm(this.ctlPath, { force: true }).catch(() => undefined);
   }
 
   /** Trial-spawn serve-web across the port range; every candidate must be
@@ -611,7 +655,13 @@ export class RemoteConnectionManager {
   async open(hostAlias: string, codePath: string): Promise<RemoteStatus> {
     const existing = this.connections.get(hostAlias);
     if (existing) {
-      if (existing.state === 'serving' || existing.state === 'connecting') {
+      if (
+        existing.state === 'serving' ||
+        existing.state === 'connecting' ||
+        existing.state === 'reconnecting'
+      ) {
+        // Already live or recovering — reuse it. Replacing a reconnecting
+        // connection would tear down an in-flight recovery.
         return existing.status();
       }
       // failed / closed → replace with a fresh attempt

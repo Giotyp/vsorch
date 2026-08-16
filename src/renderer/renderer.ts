@@ -515,7 +515,7 @@ function renderRemotesMenu(): void {
   if (remoteList.length === 0) {
     const empty = document.createElement('div');
     empty.id = 'remotes-empty';
-    empty.textContent = 'no remotes configured';
+    empty.textContent = 'no remotes — add a "remotes" list to ~/.vsorch/config.json';
     remotesMenu.appendChild(empty);
     return;
   }
@@ -567,7 +567,11 @@ function waitForRemotesResolved(): Promise<void> {
 
 function onRemotesResolved(remotes: RemoteResolution[]): void {
   remoteList = remotes;
-  remotesBtn.disabled = remotes.length === 0;
+  // Enable the button once resolution has run, even with zero remotes: a
+  // disabled button is indistinguishable from a broken one, and the menu
+  // itself explains an empty list ("no remotes configured"). Leaving it
+  // disabled just hides the one hint that remotes live in the config file.
+  remotesBtn.disabled = false;
   renderRemotesMenu();
   if (!remotesResolvedOnce) {
     remotesResolvedOnce = true;
