@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/vsorch-icon.png" alt="vsorch" width="128" height="128" />
+</p>
+
 # vsorch
 
 Orchestrate multiple real VS Code workbenches inside a single desktop window.
@@ -5,6 +9,19 @@ Orchestrate multiple real VS Code workbenches inside a single desktop window.
 vsorch is an Electron shell that hosts VS Code panes. It does not reimplement
 any editor behavior — each pane is a full VS Code workbench (open folders, edit
 and save files, integrated terminal) served by the machine's installed VS Code.
+
+> [!WARNING]
+> **vsorch is not yet notarized by Apple, so macOS Gatekeeper blocks it on
+> first launch** — you'll see *"vsorch cannot be opened because it is from an
+> unidentified developer"* (or *"is damaged"*). This is expected. To open it,
+> do **one** of the following, once:
+>
+> - **Right-click** (or Control-click) `vsorch` in Applications → **Open** →
+>   **Open** in the dialog, or
+> - run `xattr -dr com.apple.quarantine /Applications/vsorch.app` in Terminal.
+>
+> After that it launches normally. A signed + notarized release will remove
+> this step entirely.
 
 ## Install (macOS)
 
@@ -19,9 +36,9 @@ its own runtime, so Node.js is *not* required to run a packaged build. First
 launch is slow the first time only — VS Code downloads its server component
 into `~/.vscode/cli/serve-web`.
 
-> Releases are code-signed and notarized by Apple, so vsorch opens without
-> Gatekeeper warnings. If you build an unsigned DMG yourself, right-click the
-> app and choose **Open** the first time to bypass Gatekeeper.
+Current builds are **not** signed or notarized, so macOS shows a Gatekeeper
+warning on first launch — see the note at the top of this README for the
+one-time bypass.
 
 ## How it works
 
