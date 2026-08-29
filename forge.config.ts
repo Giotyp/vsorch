@@ -1,22 +1,47 @@
 import type { ForgeConfig } from '@electron-forge/shared-types';
 import { MakerSquirrel } from '@electron-forge/maker-squirrel';
 import { MakerZIP } from '@electron-forge/maker-zip';
+import { MakerDMG } from '@electron-forge/maker-dmg';
 import { MakerDeb } from '@electron-forge/maker-deb';
 import { MakerRpm } from '@electron-forge/maker-rpm';
+import { PublisherGithub } from '@electron-forge/publisher-github';
 import { VitePlugin } from '@electron-forge/plugin-vite';
 import { FusesPlugin } from '@electron-forge/plugin-fuses';
 import { FuseV1Options, FuseVersion } from '@electron/fuses';
 
+// Code-sign + notarize only when Apple credentials are present in the
+// environment (i.e. in CI release builds). Local `npm run make` stays
+// unsigned so contributors can build without an Apple Developer account.
+const isSigning = Boolean(process.env.APPLE_ID && process.env.APPLE_TEAM_ID);
+
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
+    icon: 'assets/vsorch-icon', // Forge appends .icns (macOS) / .ico (Windows)
+    ...(isSigning
+      ? {
+          osxSign: {}, // hardened runtime + auto-detected Developer ID
+          osxNotarize: {
+            appleId: process.env.APPLE_ID!,
+            appleIdPassword: process.env.APPLE_APP_SPECIFIC_PASSWORD!,
+            teamId: process.env.APPLE_TEAM_ID!,
+          },
+        }
+      : {}),
   },
   rebuildConfig: {},
   makers: [
     new MakerSquirrel({}),
-    new MakerZIP({}, ['darwin']),
+    new MakerZIP({}, ['darwin']), // required for macOS auto-update feeds
+    new MakerDMG({ icon: 'assets/vsorch-icon.icns' }, ['darwin']), // drag-to-Applications installer
     new MakerRpm({}),
     new MakerDeb({}),
+  ],
+  publishers: [
+    new PublisherGithub({
+      repository: { owner: 'Giotyp', name: 'vsorch' },
+      draft: true, // publish as a draft release to review before going live
+    }),
   ],
   plugins: [
     new VitePlugin({

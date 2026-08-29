@@ -6,6 +6,23 @@ vsorch is an Electron shell that hosts VS Code panes. It does not reimplement
 any editor behavior — each pane is a full VS Code workbench (open folders, edit
 and save files, integrated terminal) served by the machine's installed VS Code.
 
+## Install (macOS)
+
+Download the latest `vsorch-<version>-arm64.dmg` from the
+[Releases](https://github.com/Giotyp/vsorch/releases) page, open it, and drag
+**vsorch** to Applications. Then launch it from Applications or Spotlight.
+
+vsorch drives your own VS Code, so one prerequisite remains regardless of how
+you install it: **VS Code must be installed with its `code` CLI on PATH** (in
+VS Code, run "Shell Command: Install 'code' command in PATH"). The app bundles
+its own runtime, so Node.js is *not* required to run a packaged build. First
+launch is slow the first time only — VS Code downloads its server component
+into `~/.vscode/cli/serve-web`.
+
+> Releases are code-signed and notarized by Apple, so vsorch opens without
+> Gatekeeper warnings. If you build an unsigned DMG yourself, right-click the
+> app and choose **Open** the first time to bypass Gatekeeper.
+
 ## How it works
 
 On startup vsorch:
@@ -50,12 +67,17 @@ and saves it (workbench state resets once when that happens).
   `~/.vscode/cli/serve-web` the first time `serve-web` runs, so the very first
   vsorch launch can take a while)
 
-## Run
+## Run from source (development)
 
 ```
 npm install
 npm start
 ```
+
+To build a distributable DMG locally (unsigned): `npm run make`. The artifact
+lands in `out/make/`. Signed, notarized release DMGs are produced by the
+`Release` GitHub Actions workflow when a `v*` tag is pushed — see
+[Releasing](#releasing).
 
 The window opens with one VS Code Welcome workbench. Click `+` in the top bar
 to add another independent workbench. Click a pane to focus it (highlighted
@@ -164,3 +186,36 @@ src/
   activate.
 - If a stale `code` CLI shadows the desktop app on PATH, vsorch serves that
   older version instead — a banner warns when this is detected.
+
+## Releasing
+
+Signed + notarized DMGs are cut by the `Release` workflow
+(`.github/workflows/release.yml`) on a version tag:
+
+```
+npm version patch      # bumps package.json + creates the git tag
+git push --follow-tags
+```
+
+The workflow builds on an Apple-Silicon runner, signs with a Developer ID,
+notarizes, and uploads the DMG to a **draft** GitHub Release for you to review
+and publish.
+
+One-time setup — add these repository secrets (Settings → Secrets and variables
+→ Actions):
+
+| Secret | What it is |
+| --- | --- |
+| `MACOS_CERT_P12` | Base64 of your exported *Developer ID Application* cert (`base64 -i cert.p12 \| pbcopy`) |
+| `MACOS_CERT_PASSWORD` | Password used when exporting the `.p12` |
+| `APPLE_ID` | Apple ID email for notarization |
+| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password for that Apple ID |
+| `APPLE_TEAM_ID` | Your Apple Developer Team ID |
+
+Without these secrets the workflow still runs and produces an **unsigned** DMG
+(useful for smoke tests). Requires an Apple Developer Program membership to
+obtain the Developer ID certificate.
+
+After each release, bump `version` and `sha256` in
+`packaging/homebrew/vsorch.rb` in your Homebrew tap so
+`brew install --cask giotyp/tap/vsorch` picks up the new build.
